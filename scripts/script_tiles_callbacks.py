@@ -10,7 +10,6 @@ def cook(scriptOp):
     import cv2
 
     tlist  = op('/project1/Mapa2/tiles/table_tilelist')
-    coords = op('/project1/Mapa2/data/table_coords')
     W, H = 1280, 720
     canvas = np.zeros((H, W, 4), dtype=np.float32)
 
@@ -61,49 +60,5 @@ def cook(scriptOp):
                 canvas[cy0:cy1, cx0:cx1] = img_rgba[py0:py1, px0:px1]
             except Exception as e:
                 print('[script_tiles] tile', i, e)
-
-    # --- 2. Overlay de estaciones ---
-    if coords is not None and coords.numRows >= 2:
-        try:
-            ext     = op('/project1/Mapa2').ext.MapaExt
-            sel     = ext.selectedStation
-            sel_key = (sel['area'], sel['estacion']) if sel else None
-        except Exception:
-            ext     = None
-            sel_key = None
-
-        # Trabajar en uint8 para cv2.circle
-        ov = (canvas * 255).astype('uint8')
-
-        for i in range(1, coords.numRows):
-            try:
-                lat   = float(str(coords[i, 'lat']))
-                lon   = float(str(coords[i, 'lon']))
-                area  = str(coords[i, 'area'])
-                estac = str(coords[i, 'estacion'])
-            except Exception:
-                continue
-            if ext is None:
-                continue
-            try:
-                px, py_screen = ext.latLonToScreenXY(lat, lon)
-                # py_screen: 0=arriba, crece hacia abajo (coords pantalla)
-                # numpy row 0 = bottom en TD → invertir Y
-                cx_dot = int(round(px))
-                cy_dot = H - int(round(py_screen))
-                if cx_dot < 0 or cx_dot >= W or cy_dot < 0 or cy_dot >= H:
-                    continue
-                if sel_key and (area, estac) == sel_key:
-                    color_bgr = (30, 220, 255)  # amarillo (BGR)
-                    radius    = 9
-                else:
-                    color_bgr = (50, 50, 220)   # rojo (BGR)
-                    radius    = 5
-                cv2.circle(ov, (cx_dot, cy_dot), radius, color_bgr + (255,), -1)
-                cv2.circle(ov, (cx_dot, cy_dot), radius, (255, 255, 255, 255), 1)
-            except Exception as e:
-                print('[script_tiles] dot', i, e)
-
-        canvas = ov.astype('float32') / 255.0
 
     scriptOp.copyNumpyArray(canvas)

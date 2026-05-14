@@ -235,13 +235,19 @@ class MapaExt:
         except Exception as e:
             print('[MapaExt] Error escribiendo table_tilelist:', e)
 
-        # Forzar recook del scriptTOP de tiles
+        # Forzar recook de ambas capas
         try:
             script_tiles = self._owner.op('tiles/script_tiles')
             if script_tiles is not None:
                 script_tiles.cook(force=True)
         except Exception as e:
             print('[MapaExt] Error forzando cook de script_tiles:', e)
+        try:
+            script_dots = self._owner.op('tiles/script_dots')
+            if script_dots is not None:
+                script_dots.cook(force=True)
+        except Exception as e:
+            print('[MapaExt] Error forzando cook de script_dots:', e)
 
         print('[MapaExt] updateTileGrid zoom={} -> {} tiles'.format(
             int(self.zoomFloat), len(tiles)))
@@ -290,8 +296,28 @@ class MapaExt:
         )
         self.selectedStation = self._findNearestStation(lat_lon[0], lat_lon[1])
         self._syncCustomPars()
+        self._writeSelectionInfo()
+        # Forzar recook del layer de puntos para actualizar el color amarillo
+        try:
+            script_dots = self._owner.op('tiles/script_dots')
+            if script_dots is not None:
+                script_dots.cook(force=True)
+        except Exception as e:
+            print('[MapaExt] Error recook script_dots:', e)
         if self.selectedStation:
             print('[MapaExt] Estación seleccionada:', self.selectedStation['estacion'])
+
+    def _writeSelectionInfo(self):
+        """
+        Escribe el texto formateado de la estación seleccionada en data/text_selectedinfo.
+        El Text TOP de la UI lee ese DAT para mostrar el panel de información.
+        """
+        try:
+            dat = self._owner.op('data/text_selectedinfo')
+            if dat is not None:
+                dat.text = self.selectedInfo
+        except Exception as e:
+            print('[MapaExt] Error escribiendo text_selectedinfo:', e)
 
     def onHoverScreen(self, x_norm, y_norm):
         """Actualiza hoverLat/Lon desde posición de cursor normalizada."""

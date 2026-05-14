@@ -1,0 +1,516 @@
+
+
+====== chopexec1 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+c = op("count2")
+no = op("constant12")
+lo = op("logic4")
+i = op("select34")
+def onOffToOn(channel, sampleIndex, val, prev):
+	if lo[0] == 1:
+		no.par.value0 = 1
+		no.par.value1 = i[0]
+		c.par.resetpulse.pulse()
+		#op("timer6b").start = 1
+		
+
+		print("gg")
+	else:
+		no.par.value0 = 0
+		pass
+	return
+
+def whileOn(channel, sampleIndex, val, prev):
+	return
+
+def onOnToOff(channel, sampleIndex, val, prev):
+	return
+
+def whileOff(channel, sampleIndex, val, prev):
+	return
+
+def onValueChange(channel, sampleIndex, val, prev):
+	return
+	
+
+====== chopexec10 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+import pathlib
+import asyncio
+import requests
+touchprojectPath = pathlib.Path().resolve()
+
+
+def onValueChange(channel, sampleIndex, val, prev):
+	n=op("select3")
+	x = int(n["tile_x"])
+	y =int(n["tile_y"])
+	zoom = int(n["zoom"])
+	zoomfloat = int(n["zoomfloat"])
+	
+	tileSize = 512
+	screenWidth = int(n["anchoMapaPix"])
+	screenHeight = int(n["altoMapaPix"])
+	numGrids = math.floor(math.pow(2.0, zoomfloat))
+	numTilesX = math.ceil(screenWidth / tileSize / 2.0)
+	numTilesY = math.ceil(screenHeight / tileSize / 2.0)
+	for i in range(x - numTilesX, (x + numTilesX)+1):
+	    if i < 0 or i>= numGrids:
+	        print("out")
+	    else:
+		    for j in range(y - numTilesY, (y + numTilesY)+1):
+		        if j < 0 or j>= numGrids:
+		            print("out")
+		        else:
+		        	print(i)
+	p = touchprojectPath / "TilesDark" / str(zoom) / str(x)
+	file = pathlib.PurePath(str(y)+".png")
+	fullpath = p / file
+	
+	if not fullpath.exists():
+		if not p.exists():
+			p.mkdir(parents=True)
+			
+		# Get the current event loop
+		#loop = asyncio.get_event_loop()
+		
+		keyMapbox = "pk.eyJ1IjoiYWxlZGVsIiwiYSI6ImNrdGMzbGtiejF2a3QycHBjcXY0YXpsNDgifQ.7jeBb_NwoEO4qQAX3V0c3Q"
+		url = "https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/"+ str(zoom) +"/"+str(x)+"/"+str(y)+"?tileSize=512&zoomOffset=-1&access_token="+keyMapbox
+		#url = "https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/8/219/99?tileSize=512&zoomOffset=-1&access_token=pk.eyJ1IjoiYWxlZGVsIiwiYSI6ImNrdGMzbGtiejF2a3QycHBjcXY0YXpsNDgifQ.7jeBb_NwoEO4qQAX3V0c3Q"
+		print(url)
+		try:
+			#r = await loop.run_in_executor(None, requests.get, url)
+			r = requests.get(url)
+			#print(r.status_code)
+			#print(r.headers["content-type"])
+			if r.status_code == requests.codes.ok:
+				f = open(fullpath, "ab")
+				f.write(r.content)
+				f.close()
+		except requests.ConnectionError:
+			print("errror de conexion con mapbox")
+			return
+			
+	else:
+		print("ya existe OK")
+	return
+	
+
+====== chopexec12 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+n = op('tableDiff')
+def onValueChange(channel, sampleIndex, val, prev):
+	#n[channel.index,0] = val - prev
+	if val > prev:
+		n[channel.index,0] = -1
+	else:
+		n[channel.index,0] = 1
+	if val == prev:
+		n[channel.index,0] = 0
+	return
+	
+
+====== chopexec2 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+cg =mod("computaGrid")
+misdatos = op("constant9")
+
+def onValueChange(channel, sampleIndex, val, prev):
+	dx = op("null7")["u"]
+	dy= op("null7")["v"]
+	centerLat = misdatos.par.value10
+	centerLon = misdatos.par.value11
+	centerlatlog = cg.drag(dx,dy,[centerLat,centerLon],misdatos.par.value7)
+	#print(centerlatlog)
+	misdatos.par.value10 = centerlatlog[0]
+	misdatos.par.value11 = centerlatlog[1]
+	fixedZoom = misdatos.par.value6
+	norm = cg.fromLngLatToTileIndex([centerLat, centerLon])
+	fixedPowZoom = math.pow(2, fixedZoom)
+	centerTileIndexX = math.floor(norm[0] * fixedPowZoom)
+	centerTileIndexY = math.floor(norm[1] * fixedPowZoom)
+	misdatos.par.value4=centerTileIndexX
+	misdatos.par.value5=centerTileIndexY
+	return
+	
+
+====== chopexec3 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+no = op("constant12")
+
+def onOffToOn(channel, sampleIndex, val, prev):
+	no.par.value0 = 0
+	return
+
+def whileOn(channel, sampleIndex, val, prev):
+	return
+
+def onOnToOff(channel, sampleIndex, val, prev):
+	no.par.value0 = 1
+	return
+
+def whileOff(channel, sampleIndex, val, prev):
+	return
+
+def onValueChange(channel, sampleIndex, val, prev):
+	#no.par.value0 = val
+	return
+	
+
+====== chopexec5 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+import pathlib
+import asyncio
+import requests
+touchprojectPath = pathlib.Path().resolve()
+
+def onValueChange(channel, sampleIndex, val, prev):
+	n=op("select3")
+	x = int(n["tile_x"])
+	y =int(n["tile_y"])
+	zoom = int(n["zoom"])
+	zoomfloat = int(n["zoomfloat"])
+	
+	tileSize = 512
+	screenWidth = int(n["anchoMapaPix"])
+	screenHeight = int(n["altoMapaPix"])
+	numGrids = math.floor(math.pow(2.0, zoomfloat))
+	numTilesX = math.ceil(screenWidth / tileSize / 2.0)
+	numTilesY = math.ceil(screenHeight / tileSize / 2.0)
+	for i in range(x - numTilesX, (x + numTilesX)+1):
+		if i < 0 or i>= numGrids:
+			print("out")
+		else:
+			for j in range(y - numTilesY, (y + numTilesY)+1):
+				if j < 0 or j>= numGrids:
+					print("out")
+				else:
+					print(j)
+					p = touchprojectPath / "TilesDark" / str(zoom) / str(i)
+					file = pathlib.PurePath(str(j)+".png")
+					fullpath = p / file
+					
+					if not fullpath.exists():
+						if not p.exists():
+							p.mkdir(parents=True)
+							
+						# Get the current event loop
+						#loop = asyncio.get_event_loop()
+						
+						keyMapbox = "pk.eyJ1IjoiYWxlZGVsIiwiYSI6ImNrdGMzbGtiejF2a3QycHBjcXY0YXpsNDgifQ.7jeBb_NwoEO4qQAX3V0c3Q"
+						#url = "https://api.mapbox.com/v4/mapbox.terrain-rgb/"+ str(zoom) +"/"+str(i)+"/"+str(j)+".pngraw?access_token="+keyMapbox
+						url = "https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/"+ str(zoom) +"/"+str(i)+"/"+str(j)+"?tileSize=512&zoomOffset=-1&access_token="+keyMapbox
+						print(url)
+						try:
+							#r = await loop.run_in_executor(None, requests.get, url)
+							r = requests.get(url)
+							#print(r.status_code)
+							#print(r.headers["content-type"])
+							if r.status_code == requests.codes.ok:
+								f = open(fullpath, "ab")
+								f.write(r.content)
+								f.close()
+						except requests.ConnectionError:
+							print("errror de conexion con mapbox")
+							return
+							
+					else:
+						print("ya existe OK")
+	return
+	
+
+====== chopexec6 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+import pathlib
+import asyncio
+import requests
+touchprojectPath = pathlib.Path().resolve()
+
+
+def onValueChange(channel, sampleIndex, val, prev):
+	n=op("select3")
+	x = int(n["tile_x"])
+	y =int(n["tile_y"])
+	zoom = int(n["zoom"])
+	zoomfloat = int(n["zoomfloat"])
+	
+	tileSize = 256
+	screenWidth = int(n["anchoMapaPix"])
+	screenHeight = int(n["altoMapaPix"])
+	numGrids = math.floor(math.pow(2.0, zoomfloat))
+	numTilesX = math.ceil(screenWidth / tileSize / 2.0)
+	numTilesY = math.ceil(screenHeight / tileSize / 2.0)
+	for i in range(x - numTilesX, (x + numTilesX)+1):
+	    if i < 0 or i>= numGrids:
+	        print("out")
+	    else:
+		    for j in range(y - numTilesY, (y + numTilesY)+1):
+		        if j < 0 or j>= numGrids:
+		            print("out")
+		        else:
+		        	print(i)
+	p = touchprojectPath / "Tiles3d" / str(zoom) / str(x)
+	file = pathlib.PurePath(str(y)+".png")
+	fullpath = p / file
+	
+	if not fullpath.exists():
+		if not p.exists():
+			p.mkdir(parents=True)
+			
+		# Get the current event loop
+		#loop = asyncio.get_event_loop()
+		
+		keyMapbox = "pk.eyJ1IjoiYWxlZGVsIiwiYSI6ImNrdGMzbGtiejF2a3QycHBjcXY0YXpsNDgifQ.7jeBb_NwoEO4qQAX3V0c3Q"
+		url = "https://api.mapbox.com/v4/mapbox.terrain-rgb/"+ str(zoom) +"/"+str(x)+"/"+str(y)+".pngraw?access_token="+keyMapbox
+		print(url)
+		try:
+			#r = await loop.run_in_executor(None, requests.get, url)
+			r = requests.get(url)
+			#print(r.status_code)
+			#print(r.headers["content-type"])
+			if r.status_code == requests.codes.ok:
+				f = open(fullpath, "ab")
+				f.write(r.content)
+				f.close()
+		except requests.ConnectionError:
+			print("errror de conexion con mapbox")
+			return
+			
+	else:
+		print("ya existe OK")
+	return
+	
+
+====== chopexec8 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+cg =mod("computaGrid")
+misdatos = op("constant9")
+
+def onValueChange(channel, sampleIndex, val, prev):
+	screenWidth = misdatos["anchoMapaPix"]
+	screenHeight = misdatos["altoMapaPix"]
+	centerLat = misdatos.par.value10
+	centerLon = misdatos.par.value11
+	zoom = misdatos.par.value7
+	#str((op('datos')['click_pantalla_x']+0.5)*op('datos')['anchoMapaPix'])+"\n"+str((op('datos')['click_pantalla_y']+0.5)*op('datos')['altoMapaPix'])
+	x = op("rename1")["x"]
+	y = op("rename1")["y"]
+	#px = screenWidth-((x+0.5)*screenWidth)
+	#py= screenHeight+(y+0.5)*screenHeight
+	px = (screenWidth*(x+0.5))
+	py= screenHeight-(screenHeight*(y+0.5))
+	latlog = cg.toLatLng([px,py],[centerLat,centerLon],[screenWidth,screenHeight],zoom)
+	#latlog = cg.toLatLng([xpix*2,ypix*2],[centerLon,centerLat],[screenWidth,screenHeight],zoom)
+	misdatos.par.value0 = latlog[0]
+	misdatos.par.value1 = latlog[1]
+	return
+	
+
+====== chopexec9 ======
+# me - this DAT
+# 
+# channel - the Channel object which has changed
+# sampleIndex - the index of the changed sample
+# val - the numeric value of the changed sample
+# prev - the previous sample value
+# 
+# Make sure the corresponding toggle is enabled in the CHOP Execute DAT.
+cg =mod("computaGrid")
+misdatos = op("constant9")
+
+def onValueChange(channel, sampleIndex, val, prev):
+	screenWidth = misdatos["anchoMapaPix"]
+	screenHeight = misdatos["altoMapaPix"]
+	centerLat = misdatos.par.value10
+	centerLon = misdatos.par.value11
+	zoom = misdatos.par.value7
+	#str((op('datos')['click_pantalla_x']+0.5)*op('datos')['anchoMapaPix'])+"\n"+str((op('datos')['click_pantalla_y']+0.5)*op('datos')['altoMapaPix'])
+	x = op("math3")["x"]
+	y = op("math3")["y"]
+	#px = screenWidth-((x+0.5)*screenWidth)
+	#py= screenHeight+(y+0.5)*screenHeight
+	px = (screenWidth*(x+0.5))
+	py= screenHeight-(screenHeight*(y+0.5))
+	latlog = cg.toLatLng([px,py],[centerLat,centerLon],[screenWidth,screenHeight],zoom)
+	#latlog = cg.toLatLng([xpix*2,ypix*2],[centerLon,centerLat],[screenWidth,screenHeight],zoom)
+	misdatos.par.value12 = latlog[0]
+	misdatos.par.value13 = latlog[1]
+	return
+	
+
+====== datexec1 ======
+# me - this DAT.
+# 
+# dat - the changed DAT
+# rows - a list of row indices
+# cols - a list of column indices
+# cells - the list of cells that have changed content
+# prev - the list of previous string contents of the changed cells
+# 
+# Make sure the corresponding toggle is enabled in the DAT Execute DAT.
+# 
+# If rows or columns are deleted, sizeChange will be called instead of row/col/cellChange.
+
+
+def onTableChange(dat):
+	print("aaaaaaaaaaaaaaaaa")
+	op("text13").run()
+	return
+
+def onRowChange(dat, rows):
+	return
+
+def onColChange(dat, cols):
+	return
+
+def onCellChange(dat, cells, prev):
+	return
+
+def onSizeChange(dat):
+	return
+	
+
+====== execute1 ======
+# me - this DAT
+# 
+# frame - the current frame
+# state - True if the timeline is paused
+# 
+# Make sure the corresponding toggle is enabled in the Execute DAT.
+
+def onStart():
+	op("cameraViewport2").par.Gotopreset2.pulse()
+	return
+
+def onCreate():
+	op("cameraViewport2").par.Gotopreset2.pulse()
+	return
+
+def onExit():
+	return
+
+def onFrameStart(frame):
+	return
+
+def onFrameEnd(frame):
+	return
+
+def onPlayStateChange(state):
+	return
+
+def onDeviceChange():
+	return
+
+def onProjectPreSave():
+	return
+
+def onProjectPostSave():
+	return
+
+	
+
+====== panelexec1 ======
+# me - this DAT
+# panelValue - the PanelValue object that changed
+# prev - the previous value of the PanelValue object that changed
+# Make sure the corresponding toggle is enabled in the Panel Execute DAT.
+
+def onOffToOn(panelValue):
+	return
+
+def whileOn(panelValue):
+	return
+
+def onOnToOff(panelValue):
+	return
+
+def whileOff(panelValue):
+	return
+
+def onValueChange(panelValue, prev):
+	p = op("constant11").par.value0
+	if p >= 20:
+		op("constant11").par.value0 = 20
+	if p < 0:
+		op("constant11").par.value0 = 0
+		return
+	
+	op("constant11").par.value0 = p + panelValue*0.02
+	return
+	
+
+====== panelexec2 ======
+# me - this DAT
+# panelValue - the PanelValue object that changed
+# prev - the previous value of the PanelValue object that changed
+# Make sure the corresponding toggle is enabled in the Panel Execute DAT.
+
+def onValueChange(panelValue, prev):
+	max = 8.99
+	min = 5
+	p = op("constant11").par.value0
+	if p >= max:
+		op("constant11").par.value0 = max
+	if p < min:
+		op("constant11").par.value0 = min
+		return
+	
+	op("constant11").par.value0 = p + panelValue*0.2
+	return
+	

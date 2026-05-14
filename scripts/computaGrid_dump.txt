@@ -1,0 +1,150 @@
+datos = op("datos")
+zoom = datos["zoomfloat"]
+fixedZoom = datos["zoom"]
+centerMapaLat = datos["centerLat"]
+CenterMapaLon = datos["centerLon"]
+
+screenWidth = datos["anchoMapaPix"]
+screenHeight = datos["altoMapaPix"]
+
+tileSize = 512
+
+centerX = screenWidth / 2.0;
+centerY = screenHeight / 2.0;
+
+def deg2num(lat_deg, lon_deg, zoom):
+	lat_rad = math.radians(lat_deg)
+	n = 2.0 ** zoom
+	xtile = int((lon_deg + 180.0) / 360.0 * n)
+	ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+	return (xtile, ytile)
+
+def fromLngLatToTileIndex(center):
+	lat = center[0]
+	lon = center[1]
+	x = (lon +180.0) / 360.0
+	sinlat = math.sin(lat * math.pi /180.0)
+	y = 0.5 - math.log((1.0 + sinlat) / (1.0 -sinlat)) / (4.0 * math.pi)
+	return (x, y)
+
+def fromTileIndexToLngLat(tile):
+	x = tile[0]
+	y = tile[1]
+	xx = x - 0.5
+	yy = 0.5 - y
+
+	lat = 90.0 - 360.0 * math.atan(math.exp(-yy * 2.0 * math.pi))/ math.pi
+	lon = 360.0 * xx
+
+	return (lat, lon)
+
+# Converts [LatLng] coordinates to XY.
+def fromLatLngToXYCoords(location, centerlatlong):
+	scale = math.pow(2.0, zoom)
+	centerX = screenWidth /2.0
+	centerY = screenHeight/2.0
+	mon = fromLngLatToTileIndex(centerlatlong)
+	l = fromLngLatToTileIndex(location)
+	dx = l[0] - mon[0]
+	dy = l[1] - mon[1]
+	s = tileSize * scale
+
+	return (centerX + dx *s , centerY + dy * s)
+	
+def fromLatLngToXYCoords2(location, centerlatlong,screenwh,zoom2):
+	scale = math.pow(2.0, zoom2)
+	centerX = screenwh[0] /2.0
+	centerY = screenwh[1]/2.0 
+	mon = fromLngLatToTileIndex(centerlatlong)
+	l = fromLngLatToTileIndex(location)
+	dx = l[0] - mon[0]
+	dy = l[1] - mon[1]
+	s = tileSize * scale
+
+	return (centerX + dx *s , centerY + dy * s)
+
+# Drags the map by [dx], [dy] pixels.
+def drag(dx, dy, center, zoom, tilesize = 512):
+	scale = math.pow(2.0, zoom)
+	mon = fromLngLatToTileIndex(center)
+	#mon[0] -= (dx / tilesize) / scale
+	#mon[1] -= (dy / tilesize) / scale
+	a = [0,0]
+	a[0] = mon[0] - (dx / tilesize) / scale
+	a[1] = mon[1] - (dy / tilesize) / scale
+
+	return fromTileIndexToLngLat(a)
+
+def toLatLng(posscreen,center,screenwh, zoom2,tilesize = 512):
+	scale = math.pow(2.0, zoom2)
+	mon = fromLngLatToTileIndex(center)
+	centerX = screenwh[0] /2.0
+	centerY = screenwh[1]/2.0 
+	dx = centerX - posscreen[0]
+	dy = centerY - posscreen[1]
+	x = mon[0] - (dx / tilesize) / scale
+	y = mon[1] - (dy / tilesize) / scale
+	return fromTileIndexToLngLat([x,y])
+
+#print(zoom)
+
+scale = math.pow(2.0, zoom)
+#print(scale)
+
+#norm = [datos["tile_x"], datos["tile_y"] ]
+#nor = deg2num(centerMapaLat, CenterMapaLon, zoom)
+#print("centro latlong to pixels "+ str(nor))
+#norm = [nor[0] / scale, nor[1] / scale ]
+norm = fromLngLatToTileIndex([centerMapaLat, CenterMapaLon])
+#print("norm " + str(norm))
+
+ttl = [norm[0]*tileSize*scale, norm[1]*tileSize*scale]
+#print("ttl " + str(ttl))
+fixedPowZoom = math.pow(2, fixedZoom)
+
+centerTileIndexX = math.floor(norm[0] * fixedPowZoom)
+centerTileIndexY = math.floor(norm[1] * fixedPowZoom)
+#print("center tile: "+ str(centerTileIndexX) + " " + str(centerTileIndexY))
+
+scaleValue = math.pow(2.0, (zoom % 1))
+tileSizeScaled = tileSize * scaleValue
+#print(tileSizeScaled)
+numGrids = math.floor(math.pow(2.0, zoom))
+#print("numero de Grids "+ str(numGrids))
+
+numTilesX = math.ceil(screenWidth / tileSize / 2.0)
+numTilesY = math.ceil(screenHeight / tileSize / 2.0)
+
+#print("numero de tiles " + str(numTilesX) +" "+str(numTilesY))
+#print(numTilesY)
+#print(centerTileIndexX)
+#print(centerTileIndexY)
+#print(centerTileIndexX - numTilesX)
+#print(centerTileIndexX + numTilesX)
+
+output = op("tiles_data")
+output.clear()
+output.appendRow(["id","ox","oy", "tamx","tamy", "tilex", "tiley", "zoom","filePath"])
+for i in range(centerTileIndexX - numTilesX, (centerTileIndexX + numTilesX)+1):
+	if i < 0 or i>= numGrids:
+		print("out")
+	else:
+		for j in range(centerTileIndexY - numTilesY, (centerTileIndexY + numTilesY)+1):
+			if j < 0 or j>= numGrids:
+				print("out")
+			else:
+				ox = (i * tileSizeScaled) + centerX - ttl[0]
+				oy = (j * tileSizeScaled) + centerY - ttl[1]
+				#print(ox)
+				width = tileSizeScaled
+				height= tileSizeScaled
+				#print("tileIndex --> " + str(i) +" "+ str(j))
+				#print("width "+ str(width) + " dx "+ str(ox) + " dy "+str(oy))
+				dx = ox
+				dy = oy
+				aspectratio = screenHeight/screenWidth
+				filepath = project.folder+"/TilesDark/"+str(int(fixedZoom))+"/"+str(i)+"/"+str(j)+".png"
+				output.appendRow([str(i)+str(j),((dx)/(screenWidth))+((tileSizeScaled/screenWidth)/2)-.5,((dy/screenHeight)*aspectratio)+(((tileSizeScaled/screenHeight)/2)-.5)*aspectratio, (width/screenWidth),((height/screenHeight)*aspectratio), i, j, zoom, filepath])
+				#output.appendRow([ox,oy,width,height, i, j])
+	
+	

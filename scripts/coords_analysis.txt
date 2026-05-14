@@ -1,0 +1,46 @@
+table4 115x2
+  header: ['36.4465346', '127.1191534']
+  row1: ['36.0', '126.6666667']
+  row2: ['36.4435413', '127.4787301']
+  row3: ['36.4435413', '127.4787301']
+  row4: ['36.515', '127.3197222']
+table7 1x2
+  row0: ['Lat', 'Lon']
+table1 115x63
+  header: ['1', '2022', '01', '1회차', '2022.01.03', '금강', '금강공주', '대교천1', '', '']
+  row1: ['4', '2022', '01', '1회차', '2022.01.03', '금강', '금강서해', '웅천천1', '', '']
+
+--- merge1 y allregions ---
+merge1 115x4
+  header: ['금강공주', '대교천1', '36.4465346', '127.1191534']
+  row1: ['금강서해', '웅천천1', '36.0', '126.6666667']
+allregions type=null rows=115 cols=2
+  header: ['금강공주', '대교천1']
+  row1: ['금강서해', '웅천천1']
+CSV files en proyecto: ['water2022.csv']
+
+--- table11 y allregions source ---
+table11 115x2
+  header(como fila0): ['36.4465346', '127.1191534']
+  row1: ['36.0', '126.6666667']
+  row5: ['35.190395', '129.107851']
+allregions <- ['select32(select)']
+table11 <- []
+  select32(select) <- ['table1(table)']
+
+--- table4 source ---
+select32 pars: [('extractrows', 'all'), ('rownames', '*'), ('extractcols', 'byindex'), ('colindexstart', '6'), ('colindexend', '7'), ('colnames', '*'), ('output', 'data'), ('language', 'input'), ('extension', 'languageext'), ('wordwrap', 'input')]
+select32 115x2
+  header: ['금강공주', '대교천1']
+Buscando fuente de table4 y table11 (coords estaciones)...
+table4 inputs: []
+Buscando scripts que escriben en table11/table4...
+  text2conGooglev4(text) menciona table11/table4
+  from geopy import geocoders
+g = geocoders.GoogleV3(api_key='AIzaSyDOoWM9w8GlVqvMoXoFJfDKFz4gukiswPQ')
+#g = geocoders.GoogleV3(api_key='AIzaSyCfm2O36JiIR_GVxqN2DYMPLMN0fLeAxaM')
+
+#create an input address string
+#you can also build this by reading from an input database and building a string
+
+table = 

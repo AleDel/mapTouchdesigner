@@ -1,0 +1,34 @@
+from geopy import geocoders
+g = geocoders.GoogleV3(api_key='AIzaSyDOoWM9w8GlVqvMoXoFJfDKFz4gukiswPQ')
+#g = geocoders.GoogleV3(api_key='AIzaSyCfm2O36JiIR_GVxqN2DYMPLMN0fLeAxaM')
+
+#create an input address string
+#you can also build this by reading from an input database and building a string
+
+table = op("allregions")
+tablegeoloc = op("table11")
+tablegeoloc.clear()
+
+for r in table.rows():
+	nombreEstacionMedicion = "대한민국, " + r[0] +" "+ r[1]
+	print(nombreEstacionMedicion)
+	location = g.geocode(nombreEstacionMedicion, language="ko")
+	print(location)
+	if location != None:
+		tablegeoloc.appendRow([location.latitude,location.longitude])
+		#tablegeoloc.appendRow([location.raw["lat"],location.raw["lon"]])
+		#print(location.raw["lat"])
+		print(location.latitude)
+	else:
+		tablegeoloc.appendRow(['None','None'])
+		
+
+#inputAddress = '175 5th Ave, New York,  NY' 
+
+#do the geocode
+#location = g.geocode(inputAddress, timeout=10)
+
+#some things you can get from the result
+#print(location.latitude, location.longitude)
+#print(location.raw)
+#print(location.address)

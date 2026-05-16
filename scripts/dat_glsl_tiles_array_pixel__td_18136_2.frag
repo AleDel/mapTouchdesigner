@@ -1,4 +1,4 @@
-// tiles_atlas.glsl
+﻿// tiles_atlas.glsl
 // ──────────────────────────────────────────────────────────────────────────
 // GLSL TOP — compone el mapa muestreando un Texture 2D Array de tiles.
 //

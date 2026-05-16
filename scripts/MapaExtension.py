@@ -1,4 +1,4 @@
-"""
+﻿"""
 MapaExtension.py
 Extension principal para el container Mapa2 en TouchDesigner.
 
@@ -204,6 +204,7 @@ class MapaExt:
         # --- Escribir en DATs de TouchDesigner ---
         self._writeFilteredDAT()
         self._writeCoordsDAT()
+        self._updateDotsTable()
 
         print('[MapaExt] filterData mes={} fecha={} -> {} filas'.format(
             self.currentMes, self.currentFecha or '*', len(self._filtered_rows)))
@@ -287,6 +288,20 @@ class MapaExt:
                 p.val = 13
                 p.normMin = 1
                 p.normMax = 40
+            # Color del dot normal (RGBA 0..1)
+            for name, label, dv in [
+                    ('Dotcolr', 'Dot R', 1.0), ('Dotcolg', 'Dot G', 1.0),
+                    ('Dotcolb', 'Dot B', 0.2), ('Dotcola', 'Dot A', 1.0)]:
+                if not hasattr(self._owner.par, name):
+                    p = page.appendFloat(name, label=label)[0]
+                    p.default = dv; p.min = 0.0; p.max = 1.0; p.val = dv
+            # Color del dot seleccionado (RGBA 0..1)
+            for name, label, dv in [
+                    ('Dotselr', 'Sel R', 1.0), ('Dotselg', 'Sel G', 0.4),
+                    ('Dotselb', 'Sel B', 0.0), ('Dotsela', 'Sel A', 1.0)]:
+                if not hasattr(self._owner.par, name):
+                    p = page.appendFloat(name, label=label)[0]
+                    p.default = dv; p.min = 0.0; p.max = 1.0; p.val = dv
             if not hasattr(self._owner.par, 'Infopx'):
                 p = page.appendInt('Infopx', label='Info panel X offset')[0]
                 p.default = 0; p.min = -960; p.max = 960
@@ -379,12 +394,7 @@ class MapaExt:
         self._writeSelectionInfo()
         self._writeStateDAT()
         self._scheduleAutoDeselect(self._deselect_token)
-        try:
-            sd = self._owner.op('tiles/script_dots')
-            if sd is not None:
-                sd.cook(force=True)
-        except Exception as e:
-            print('[MapaExt] Error recook script_dots en select:', e)
+        self._updateDotsTable()
         print('[MapaExt] Seleccionada:', station['estacion'] if station else '?')
 
     def deselectStation(self):
@@ -395,12 +405,7 @@ class MapaExt:
         self._writeSelectionInfo()
         self._writeStateDAT()
         self._syncCustomPars()
-        try:
-            sd = self._owner.op('tiles/script_dots')
-            if sd is not None:
-                sd.cook(force=True)
-        except Exception as e:
-            print('[MapaExt] Error recook script_dots en deselect:', e)
+        self._updateDotsTable()
         print('[MapaExt] Estación deseleccionada')
 
     def _scheduleAutoDeselect(self, token):
@@ -568,21 +573,20 @@ class MapaExt:
         files_changed     = (new_files       != self._lastTileFiles)
 
         if count_changed or positions_changed:
-            # Estructura del grid cambió: recrear replicants con los ids row-major correctos
+            # Estructura del grid cambió: recrear tile ops con los ids row-major correctos
             self._lastTileCount     = len(real_tiles)
             self._lastTilePositions = new_positions
             self._lastTileFiles     = new_files
-            rep = self._owner.op('tiles/replicator1')
-            if rep is not None:
-                rep.par.recreateall.pulse()
             self._reconnectTileArray()
         elif files_changed:
             # Mismas posiciones, distinto contenido (p.ej. descarga asincrónica)
             self._lastTileFiles = new_files
             self._updateTileFiles()
 
-        # Actualizar uniforms del GLSL TOP
+        # Actualizar uniforms del GLSL TOP y tabla de dots
         self._updateGLSLUniforms()
+        self._updateDotsTable()
+        self._updateDotsUniforms()
 
         print('[MapaExt] updateTileGrid zoom={} -> {}/{} slots ({}x{})'.format(
             int(self.zoomFloat), len(real_tiles), self._lastGridAll,
@@ -621,27 +625,58 @@ class MapaExt:
         Activa la expresión frame-based en el switch, hace prefill sincrono,
         y resetea el switch a constante para no cocinar innecesariamente cada frame.
         """
+        tex3d.par.cachesize = n_all  # slots totales (gaps = negro via moviefilein_template)
         sw.par.index.expr = 'me.time.frame-1'
         tex3d.par.active    = False
-        tex3d.par.cachesize = n_all  # slots totales (gaps = negro en switch desconectado)
         tex3d.par.prefillpulse.pulse()
         sw.par.index.val = 0  # constante: sin expresión activa post-prefill
 
     def _reconnectTileArray(self):
         """
-        Ajusta el Texture 2D Array TOP tras una recreación del replicador.
-        cachesize = _lastGridAll (grid completo), gaps quedan negros.
-        Las conexiones tile_N -> switch_tiles las gestiona replicator1_callbacks.
+        Crea los tile ops (moviefileinTOP) directamente desde table_tilelist, sin replicador.
+        - Destruye ops anteriores (tile_N con digits).
+        - Crea nuevos ops para cada fila real de la tabla.
+        - Cablea el switch COMPACTO: solo tiles reales, ordenados por row_major_id.
+          No hay gap fillers — el shader usa uIds para mapear posición → capa.
+        - Actualiza cachesize = n_real tiles y hace prefill del tex3d.
         """
         try:
             tiles_comp = self._owner.op('tiles')
             tex3d = tiles_comp.op('tiles_tex3d1')
             sw    = tiles_comp.op('switch_tiles')
-            if tex3d is None or sw is None:
+            dat   = tiles_comp.op('table_tilelist')
+            if tex3d is None or sw is None or dat is None:
                 return
-            self._prefillTex3d(tex3d, sw, self._lastGridAll)
-            print('[MapaExt] _reconnectTileArray: {}/{} slots, {} reales'.format(
-                self._lastGridAll, self._lastGridAll, self._lastTileCount))
+
+            # 1) Destruir tile ops anteriores
+            for o in list(tiles_comp.children):
+                if o.digits is not None and o.name.startswith('tile_'):
+                    o.destroy()
+
+            # 2) Recoger filas y ordenar por id (row_major_id ascendente)
+            rows = []
+            for r in range(1, dat.numRows):
+                try:
+                    rows.append((int(dat[r, 'id']), str(dat[r, 'filePath'])))
+                except Exception:
+                    continue
+            rows.sort(key=lambda x: x[0])
+
+            # 3) Crear tile ops en ese orden
+            for tid, filepath in rows:
+                new_op = tiles_comp.create(moviefileinTOP, 'tile_{}'.format(tid))
+                new_op.par.file = filepath
+
+            # 4) Cablear switch COMPACTO: solo los tiles reales, sin gap fillers
+            inputs_list = [tiles_comp.op('tile_{}'.format(tid)) for tid, _ in rows]
+            inputs_list = [o for o in inputs_list if o is not None]
+            sw.setInputs(inputs_list)
+
+            # 5) cachesize = tiles reales (no grid completo) + prefill
+            n_real = len(inputs_list)
+            self._prefillTex3d(tex3d, sw, n_real)
+            print('[MapaExt] _reconnectTileArray: {} tiles reales (compacto, grid total {})'.format(
+                n_real, self._lastGridAll))
         except Exception as e:
             print('[MapaExt] Error _reconnectTileArray:', e)
 
@@ -663,10 +698,115 @@ class MapaExt:
                 tile_op  = tiles_comp.op('tile_{}'.format(row_id))
                 if tile_op is not None:
                     tile_op.par.file = str(dat[r, 'filePath'])
-            self._prefillTex3d(tex3d, sw, self._lastGridAll)
+            self._prefillTex3d(tex3d, sw, self._lastTileCount)  # compacto: n_real
             print('[MapaExt] _updateTileFiles: {} tiles actualizados'.format(dat.numRows - 1))
         except Exception as e:
             print('[MapaExt] Error _updateTileFiles:', e)
+
+    def _updateDotsTable(self):
+        """
+        Escribe en tiles/table_dots las posiciones en pantalla (UV 0..1) de cada
+        estación del período filtrado. Cada fila: sx, sy, selected, quality.
+        Llamado desde updateTileGrid(), filterData(), selectStation(), deselectStation().
+        """
+        try:
+            dat = self._owner.op('tiles/table_dots')
+            if dat is None:
+                return
+            dat.clear()
+            dat.appendRow(['sx', 'sy', 'selected', 'quality'])
+
+            if not self._filtered_rows:
+                return
+
+            int_zoom     = int(self.zoomFloat)
+            fixed_pow    = math.pow(2.0, int_zoom)
+            scale_value  = math.pow(2.0, self.zoomFloat - int_zoom)
+            base_size    = getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
+            tile_size_px = base_size * scale_value
+
+            norm_c = tile_utils.lngLatToTileIndex(self.centerLat, self.centerLon)
+            cx = norm_c[0] * fixed_pow
+            cy = norm_c[1] * fixed_pow
+
+            sel_area = self.selectedStation['area']     if self.selectedStation else None
+            sel_name = self.selectedStation['estacion'] if self.selectedStation else None
+
+            seen = set()
+            for entry in self._filtered_rows:
+                lat = entry['lat'];  lon = entry['lon']
+                if lat is None or lon is None:
+                    continue
+                key = (entry['area'], entry['estacion'])
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                norm = tile_utils.lngLatToTileIndex(lat, lon)
+                tx = norm[0] * fixed_pow
+                ty = norm[1] * fixed_pow
+
+                # Offset en píxeles desde el centro de la pantalla
+                dpx =  (tx - cx) * tile_size_px
+                dpy = -(ty - cy) * tile_size_px   # TD UV Y: 0=abajo, 1=arriba → invertir
+
+                sx = 0.5 + dpx / self.screenW
+                sy = 0.5 + dpy / self.screenH
+
+                # Descartar puntos muy fuera de pantalla (margen 20%)
+                if sx < -0.2 or sx > 1.2 or sy < -0.2 or sy > 1.2:
+                    continue
+
+                is_sel = 1.0 if (entry['area'] == sel_area and
+                                  entry['estacion'] == sel_name) else 0.0
+                dat.appendRow([round(sx, 6), round(sy, 6), is_sel, 1.0])
+
+        except Exception as e:
+            print('[MapaExt] Error _updateDotsTable:', e)
+
+    def _updateDotsUniforms(self):
+        """
+        Actualiza los uniforms del GLSL TOP tiles/glsl_dots:
+        - uDotParams (vec0): screenW, screenH, radius(px), dotCount
+        - uDotParamsSel (vec1): radiusSel
+        - uDotColor (vec2): RGBA color normal
+        - uDotColorSel (vec3): RGBA color seleccionado
+        """
+        try:
+            glsl = self._owner.op('tiles/glsl_dots')
+            if glsl is None:
+                return
+
+            p = self._owner.par
+            radius     = float(p.Dotradius.val)    if hasattr(p, 'Dotradius')    else 9.0
+            radius_sel = float(p.Dotradiussel.val) if hasattr(p, 'Dotradiussel') else 13.0
+
+            dat = self._owner.op('tiles/table_dots')
+            n   = (dat.numRows - 1) if dat is not None else 0
+
+            glsl.par.vec0name   = 'uDotParams'
+            glsl.par.vec0valuex = self.screenW
+            glsl.par.vec0valuey = self.screenH
+            glsl.par.vec0valuez = radius
+            glsl.par.vec0valuew = float(n)
+
+            glsl.par.vec1name   = 'uDotParamsSel'
+            glsl.par.vec1valuex = radius_sel
+
+            glsl.par.vec2name   = 'uDotColor'
+            glsl.par.vec2valuex = float(p.Dotcolr.val) if hasattr(p, 'Dotcolr') else 1.0
+            glsl.par.vec2valuey = float(p.Dotcolg.val) if hasattr(p, 'Dotcolg') else 1.0
+            glsl.par.vec2valuez = float(p.Dotcolb.val) if hasattr(p, 'Dotcolb') else 0.2
+            glsl.par.vec2valuew = float(p.Dotcola.val) if hasattr(p, 'Dotcola') else 1.0
+
+            glsl.par.vec3name   = 'uDotColorSel'
+            glsl.par.vec3valuex = float(p.Dotselr.val) if hasattr(p, 'Dotselr') else 1.0
+            glsl.par.vec3valuey = float(p.Dotselg.val) if hasattr(p, 'Dotselg') else 0.4
+            glsl.par.vec3valuez = float(p.Dotselb.val) if hasattr(p, 'Dotselb') else 0.0
+            glsl.par.vec3valuew = float(p.Dotsela.val) if hasattr(p, 'Dotsela') else 1.0
+
+        except Exception as e:
+            print('[MapaExt] Error _updateDotsUniforms:', e)
 
     def _updateGLSLUniforms(self):
         """
@@ -714,6 +854,39 @@ class MapaExt:
             glsl.par.vec2valuey = self.screenH
             glsl.par.vec3name   = 'uTileSize'
             glsl.par.vec3valuex = tile_size_px
+
+            # --- Uniforms compactos: uTileCount + uIds0..uIds8 ---
+            # Leer IDs de tiles reales, mismo orden que setInputs en _reconnectTileArray
+            dat = self._owner.op('tiles/table_tilelist')
+            tile_ids = []
+            if dat is not None:
+                id_rows = []
+                for r in range(1, dat.numRows):
+                    try:
+                        id_rows.append(int(dat[r, 'id']))
+                    except:
+                        pass
+                id_rows.sort()
+                tile_ids = id_rows
+            n_real = len(tile_ids)
+
+            # uTileCount en vec3.y
+            glsl.par.vec3valuey = float(n_real)
+
+            # Expandir secuencia: necesitamos vec0..vec12 (13 total)
+            if glsl.par.vec.val < 13:
+                glsl.par.vec = 13
+
+            # Empaquetar IDs en vec4..vec12 (9 vec4, 36 slots)
+            tile_ids_padded = tile_ids + [0] * (36 - len(tile_ids))
+            for vi in range(9):   # vec4..vec12
+                ids = tile_ids_padded[vi * 4 : vi * 4 + 4]
+                vn  = 'vec{}'.format(vi + 4)
+                getattr(glsl.par, vn + 'name').val   = 'uIds{}'.format(vi)
+                getattr(glsl.par, vn + 'valuex').val = float(ids[0])
+                getattr(glsl.par, vn + 'valuey').val = float(ids[1])
+                getattr(glsl.par, vn + 'valuez').val = float(ids[2])
+                getattr(glsl.par, vn + 'valuew').val = float(ids[3])
 
         except Exception as e:
             print('[MapaExt] Error _updateGLSLUniforms:', e)

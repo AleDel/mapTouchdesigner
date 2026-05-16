@@ -1,14 +1,19 @@
 # replicator1_callbacks
+# Callback del Replicator COMP de tiles.
+# table_tilelist solo tiene filas para tiles REALES (con imagen en disco).
+# El replicador crea exactamente un op por fila -> no hay gaps.
+# Aqui asignamos archivos Y cableamos el switch compacto.
 
 
-def onRemoveReplicant(replicator, replicant):
+def onRemoveReplicant(comp, replicant):
 	return
 
-def onReplicate(replicator, allOps, newOps, template, master):
+
+def onReplicate(comp, allOps, newOps, template, master):
 	dat = op('table_tilelist')
 	sw  = op('switch_tiles')
 
-	# Lookup id -> filePath para manejar gaps (ids no consecutivos)
+	# Lookup id -> filePath
 	id_to_file = {}
 	for r in range(1, dat.numRows):
 		try:
@@ -16,18 +21,15 @@ def onReplicate(replicator, allOps, newOps, template, master):
 		except:
 			pass
 
-	for tile_op in sorted(allOps, key=lambda o: o.digits):
-		row_major_id = tile_op.digits        # id row-major (1-indexed)
-		sw_idx       = row_major_id - 1     # input del switch (0-indexed)
+	# Asignar archivo a cada op replicado
+	for tile_op in allOps:
+		tile_op.par.file = id_to_file.get(tile_op.digits, '')
 
-		# Asignar archivo correcto por id (no por fila de tabla)
-		tile_op.par.file = id_to_file.get(row_major_id, '')
-
-		# Conectar al switch en la posicion row-major correcta
-		if sw_idx < len(sw.inputConnectors):
-			ic = sw.inputConnectors[sw_idx]
-			for conn in list(ic.connections):
-				conn.disconnect()
-			tile_op.outputConnectors[0].connect(ic)
+	# Cablear switch compacto: ordenar por row_major_id (digits)
+	# input[0] = tile con id mas bajo, input[1] = siguiente, etc.
+	# El shader usa uIds para saber que id corresponde a cada capa.
+	if sw is not None:
+		sorted_ops = sorted(allOps, key=lambda o: o.digits if o.digits is not None else 0)
+		sw.setInputs(sorted_ops)
 
 	return

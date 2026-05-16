@@ -21,7 +21,8 @@ _PROJECT_DIR  = project.folder
 _SCRIPTS_DIR  = project.folder + '/scripts'
 _CSV_WATER    = project.folder + '/water2022.csv'
 _CSV_STATIONS = project.folder + '/scripts/estaciones_coords.csv'
-_TILES_DIR    = project.folder + '/TilesDark'
+_TILES_BASE   = project.folder + '/tiles'           # carpeta contenedora de todos los tilesets
+_TILES_DIR    = project.folder + '/tiles/TilesDark'  # fallback si no hay par Tileset
 
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
@@ -47,6 +48,10 @@ class MapaExt:
             self.zoom       = 6          # zoom entero (nivel de tile)
             self.screenW    = 1280.0
             self.screenH    = 720.0
+            # Leer de custom pars si ya existen (reinit)
+            _p = owner_op.par
+            if hasattr(_p, 'Screenw'): self.screenW = float(_p.Screenw.val)
+            if hasattr(_p, 'Screenh'): self.screenH = float(_p.Screenh.val)
 
             # --- Filtro activo ---
             self.currentMes   = '01'
@@ -57,11 +62,29 @@ class MapaExt:
             self.hoverLat = 0.0
             self.hoverLon = 0.0
 
+            # --- Máquina de estados ---
+            # usable: interactivo normal  |  selected: estación seleccionada
+            # waiting: esperando animación externa  |  animating: animando
+            # locked: completamente bloqueado (instalación en control)
+            self.mapState        = 'usable'
+            self._selectionTime  = None   # absTime.seconds al seleccionar (para fade)
+            self._deselect_token = 0      # incrementa c/selección → cancela run() previos
+
             # --- Datos en memoria ---
             self._water_rows    = []     # lista de dicts (datos CSV completos)
             self._water_headers = []     # lista de nombres de columnas
             self._stations      = []     # lista de dicts: area, estacion, lat, lon
             self._filtered_rows = []     # filas del día activo con coords adjuntas
+
+            self._lastTileCount     = 0   # tiles reales (con archivo) en la grilla anterior
+            self._lastTileFiles     = []   # file paths de los tiles reales
+            self._lastTilePositions = []   # posiciones (tilex, tiley) de tiles reales
+            self._lastGridAll       = 0    # grid_w * grid_h (todos los slots, incluyendo gaps)
+            self._xMinAll           = 0    # tilex mínimo del grid completo (incluyendo gaps)
+            self._yMinAll           = 0    # tiley mínimo del grid completo
+            self._gridWAll          = 1    # grid_w completo
+            self._gridHAll          = 1    # grid_h completo
+            self._tileFileSize      = tile_utils.TILE_SIZE  # ancho real del PNG del tileset activo
 
             self._loadStations()
             self._loadWaterCSV()
@@ -69,6 +92,15 @@ class MapaExt:
             # Primer cálculo de tiles y datos
             self.updateTileGrid()
             self.filterData(self.currentMes, self.currentFecha)
+
+            # Poblar menú Tileset con las carpetas Tiles* disponibles
+            self._updateTilesetPar()
+
+            # Crear pars de control visual de dots si no existen
+            self._ensureDotsControlPars()
+
+            # Crear página Control (máquina de estados + animación) si no existe
+            self._ensureControlPars()
 
             print('[MapaExt] Extension inicializada. Estaciones:', len(self._stations),
                   '| Filas CSV:', len(self._water_rows))
@@ -214,44 +246,477 @@ class MapaExt:
             print('[MapaExt] Error escribiendo table_coords:', e)
 
     # ------------------------------------------------------------------
+    # Tilesets disponibles
+    # ------------------------------------------------------------------
+
+    def _availableTilesets(self):
+        """Devuelve lista de carpetas Tiles* encontradas en tiles/, ordenadas."""
+        try:
+            dirs = sorted([
+                d for d in os.listdir(_TILES_BASE)
+                if d.startswith('Tiles') and os.path.isdir(os.path.join(_TILES_BASE, d))
+            ])
+            return dirs if dirs else ['TilesDark']
+        except Exception as e:
+            print('[MapaExt] Error escaneando tilesets:', e)
+            return ['TilesDark']
+
+    def _ensureDotsControlPars(self):
+        """Crea los pars de control visual de dots en Visualizacion si no existen."""
+        try:
+            page = None
+            for pg in self._owner.customPages:
+                if pg.name == 'Visualizacion':
+                    page = pg
+                    break
+            if page is None:
+                return
+            if not hasattr(self._owner.par, 'Dotradius'):
+                p = page.appendInt('Dotradius', label='Radio dots')[0]
+                p.default = 9
+                p.min = 1
+                p.max = 50
+                p.val = 9
+                p.normMin = 1
+                p.normMax = 30
+            if not hasattr(self._owner.par, 'Dotradiussel'):
+                p = page.appendInt('Dotradiussel', label='Radio seleccionado')[0]
+                p.default = 13
+                p.min = 1
+                p.max = 60
+                p.val = 13
+                p.normMin = 1
+                p.normMax = 40
+            if not hasattr(self._owner.par, 'Infopx'):
+                p = page.appendInt('Infopx', label='Info panel X offset')[0]
+                p.default = 0; p.min = -960; p.max = 960
+                p.normMin = -640; p.normMax = 640; p.val = 0
+            if not hasattr(self._owner.par, 'Infopy'):
+                p = page.appendInt('Infopy', label='Info panel Y offset')[0]
+                p.default = 0; p.min = -540; p.max = 540
+                p.normMin = -360; p.normMax = 360; p.val = 0
+            if not hasattr(self._owner.par, 'Screenw'):
+                p = page.appendInt('Screenw', label='Resolución ancho')[0]
+                p.default = 1280; p.min = 320; p.max = 3840
+                p.normMin = 640; p.normMax = 1920; p.val = int(self.screenW)
+            if not hasattr(self._owner.par, 'Screenh'):
+                p = page.appendInt('Screenh', label='Resolución alto')[0]
+                p.default = 720; p.min = 240; p.max = 2160
+                p.normMin = 360; p.normMax = 1080; p.val = int(self.screenH)
+        except Exception as e:
+            print('[MapaExt] Error creando pars dots:', e)
+
+    def _ensureControlPars(self):
+        """Crea la página Control con pars de estado y animación si no existen."""
+        try:
+            page = None
+            for pg in self._owner.customPages:
+                if pg.name == 'Control':
+                    page = pg
+                    break
+            if page is None:
+                page = self._owner.appendCustomPage('Control')
+            p = self._owner.par
+            if not hasattr(p, 'Mapstate'):
+                par = page.appendMenu('Mapstate', label='Estado del mapa')[0]
+                states = ['usable', 'selected', 'waiting', 'animating', 'locked']
+                par.menuNames  = states
+                par.menuLabels = ['Usable', 'Seleccionado', 'Waiting', 'Animating', 'Locked']
+                par.val = 'usable'
+            if not hasattr(p, 'Autodeselect'):
+                par = page.appendToggle('Autodeselect', label='Auto-deselect')[0]
+                par.default = True; par.val = True
+            if not hasattr(p, 'Deselectdelay'):
+                par = page.appendFloat('Deselectdelay', label='Tiempo visible (seg)')[0]
+                par.default = 8.0; par.min = 0.5; par.max = 120.0
+                par.normMin = 0.5; par.normMax = 30.0; par.val = 8.0
+            if not hasattr(p, 'Infofadein'):
+                par = page.appendFloat('Infofadein', label='Fade-in (seg)')[0]
+                par.default = 0.5; par.min = 0.0; par.max = 10.0
+                par.normMin = 0.0; par.normMax = 5.0; par.val = 0.5
+            if not hasattr(p, 'Infofadeout'):
+                par = page.appendFloat('Infofadeout', label='Fade-out (seg)')[0]
+                par.default = 0.5; par.min = 0.0; par.max = 10.0
+                par.normMin = 0.0; par.normMax = 5.0; par.val = 0.5
+            if not hasattr(p, 'Infoalpha'):
+                par = page.appendFloat('Infoalpha', label='Alpha info (auto)')[0]
+                par.default = 0.0; par.min = 0.0; par.max = 1.0; par.val = 0.0
+            if not hasattr(p, 'Deselectnow'):
+                page.appendPulse('Deselectnow', label='Deselect ahora')
+        except Exception as e:
+            print('[MapaExt] Error creando pars Control:', e)
+
+    # ------------------------------------------------------------------
+    # Máquina de estados
+    # ------------------------------------------------------------------
+
+    def _setState(self, state):
+        """Actualiza mapState y escribe en par.Mapstate (con guardia anti-loop)."""
+        self.mapState = state
+        try:
+            pe = self._owner.op('parexec_filtros')
+            if pe is not None:
+                pe.module._syncing = True
+            self._owner.par.Mapstate = state
+        except Exception as e:
+            print('[MapaExt] Error escribiendo Mapstate par:', e)
+        finally:
+            try:
+                if pe is not None:
+                    pe.module._syncing = False
+            except:
+                pass
+
+    def selectStation(self, station):
+        """
+        Selecciona una estación: inicia fade-in, programa auto-deselect.
+        station: dict con keys area, estacion, lat, lon, data.
+        """
+        self.selectedStation = station
+        self._selectionTime  = absTime.seconds
+        self._deselect_token += 1
+        self._setState('selected')
+        self._writeSelectionInfo()
+        self._writeStateDAT()
+        self._scheduleAutoDeselect(self._deselect_token)
+        try:
+            sd = self._owner.op('tiles/script_dots')
+            if sd is not None:
+                sd.cook(force=True)
+        except Exception as e:
+            print('[MapaExt] Error recook script_dots en select:', e)
+        print('[MapaExt] Seleccionada:', station['estacion'] if station else '?')
+
+    def deselectStation(self):
+        """Deselecciona la estación activa y vuelve al estado usable."""
+        self.selectedStation = None
+        self._selectionTime  = None
+        self._setState('usable')
+        self._writeSelectionInfo()
+        self._writeStateDAT()
+        self._syncCustomPars()
+        try:
+            sd = self._owner.op('tiles/script_dots')
+            if sd is not None:
+                sd.cook(force=True)
+        except Exception as e:
+            print('[MapaExt] Error recook script_dots en deselect:', e)
+        print('[MapaExt] Estación deseleccionada')
+
+    def _scheduleAutoDeselect(self, token):
+        """Programa deselect automático. token evita que runs previos actúen."""
+        try:
+            if not bool(self._owner.par.Autodeselect.val):
+                return
+            fade_in  = max(0.0, float(self._owner.par.Infofadein.val))
+            delay    = max(0.0, float(self._owner.par.Deselectdelay.val))
+            fade_out = max(0.0, float(self._owner.par.Infofadeout.val))
+            total    = fade_in + delay + fade_out
+            run(
+                "op('{}').ext.MapaExt._autoDeselect({})" .format(self._owner.path, token),
+                delaySeconds=max(0.1, total)
+            )
+        except Exception as e:
+            print('[MapaExt] Error programando auto-deselect:', e)
+
+    def _autoDeselect(self, token):
+        """Callback del run() de auto-deselect. Solo actúa si el token coincide."""
+        if token == self._deselect_token:
+            self.deselectStation()
+
+    def getInfoAlpha(self):
+        """
+        Devuelve el alpha (0-1) para el panel de información según el tiempo transcurrido.
+        Llamar desde script_dots.cook() cada frame para animar fade-in / fade-out.
+        Timeline:
+          0 → fade_in : fade-in (0→1)
+          fade_in → fade_in+delay : visible (1)
+          fade_in+delay → total : fade-out (1→0)
+        """
+        if self._selectionTime is None:
+            return 0.0
+        elapsed = absTime.seconds - self._selectionTime
+        try:
+            fade_in  = max(0.001, float(self._owner.par.Infofadein.val))
+            delay    = max(0.0,   float(self._owner.par.Deselectdelay.val))
+            fade_out = max(0.001, float(self._owner.par.Infofadeout.val))
+            auto     = bool(self._owner.par.Autodeselect.val)
+        except:
+            return 1.0
+        if elapsed < fade_in:
+            return elapsed / fade_in
+        if not auto:
+            return 1.0
+        if elapsed < fade_in + delay:
+            return 1.0
+        t_out = elapsed - fade_in - delay
+        if t_out < fade_out:
+            return max(0.0, 1.0 - t_out / fade_out)
+        return 0.0
+
+    def _writeStateDAT(self):
+        """Escribe estado completo del mapa en data/table_mapstate (key-value)."""
+        try:
+            dat = self._owner.op('data/table_mapstate')
+            if dat is None:
+                return
+            dat.clear()
+            dat.appendRow(['key', 'value'])
+            sel = self.selectedStation or {}
+            for k, v in [
+                ('state',    self.mapState),
+                ('area',     sel.get('area', '')),
+                ('estacion', sel.get('estacion', '')),
+                ('lat',      str(sel.get('lat', ''))),
+                ('lon',      str(sel.get('lon', ''))),
+                ('info_alpha', '{:.3f}'.format(self.getInfoAlpha())),
+                ('mes',      self.currentMes),
+                ('fecha',    self.currentFecha),
+                ('info',     self.selectedInfo),
+            ]:
+                dat.appendRow([k, v])
+        except Exception as e:
+            print('[MapaExt] Error escribiendo table_mapstate:', e)
+
+    def _updateTilesetPar(self):
+        """Actualiza el menú del par Tileset con las carpetas Tiles* actuales."""
+        try:
+            p = self._owner.par
+            if not hasattr(p, 'Tileset'):
+                return
+            tilesets = self._availableTilesets()
+            p.Tileset.menuLabels = tilesets
+            p.Tileset.menuNames  = tilesets
+            # Si el valor actual no está en la lista, forzar el primero
+            if str(p.Tileset.val) not in tilesets and tilesets:
+                p.Tileset.val = tilesets[0]
+            print('[MapaExt] Tilesets disponibles:', tilesets)
+        except Exception as e:
+            print('[MapaExt] Error actualizando par Tileset:', e)
+
+    @property
+    def tilesDir(self):
+        """Ruta a la carpeta de tiles activa (lee par Tileset si existe)."""
+        try:
+            p = self._owner.par
+            if hasattr(p, 'Tileset'):
+                folder = str(p.Tileset.val).strip()
+                if folder:
+                    return _TILES_BASE + '/' + folder
+        except Exception:
+            pass
+        return _TILES_DIR
+
+    # ------------------------------------------------------------------
     # Grilla de tiles
     # ------------------------------------------------------------------
 
     def updateTileGrid(self):
         """
-        Calcula los tiles visibles y escribe tiles/table_tilelist en TD.
-        Solo incluye tiles que existen en TilesDark/.
+        Calcula los tiles visibles y escribe tiles/table_tilelist.
+        tiles incluye TODAS las posiciones del grid (con gaps filePath='').
+        La tabla solo contiene tiles reales, con id=posición row-major.
         """
         tiles = tile_utils.computeVisibleTileGrid(
             self.centerLat, self.centerLon,
             self.zoomFloat,
             self.screenW, self.screenH,
-            _TILES_DIR
+            self.tilesDir
         )
+
+        # Métricas del grid completo (incluyendo gaps) para cachesize del tex3d
+        if tiles:
+            xs = [t['tilex'] for t in tiles]
+            ys = [t['tiley'] for t in tiles]
+            self._xMinAll  = min(xs)
+            self._yMinAll  = min(ys)
+            self._gridWAll = max(xs) - self._xMinAll + 1
+            self._gridHAll = max(ys) - self._yMinAll + 1
+            self._lastGridAll = self._gridWAll * self._gridHAll
+        else:
+            self._xMinAll  = 0
+            self._yMinAll  = 0
+            self._gridWAll = 1
+            self._gridHAll = 1
+            self._lastGridAll = 0
+
+        # Tamaño real del tile desde disco (una vez por pan/zoom)
+        real_files = [t['filePath'] for t in tiles if t.get('filePath')]
+        if real_files:
+            try:
+                import struct as _struct
+                with open(real_files[0], 'rb') as _f:
+                    _f.read(16)  # PNG: signature(8) + IHDR length(4) + 'IHDR'(4)
+                    _w = _struct.unpack('>I', _f.read(4))[0]
+                    if _w > 0:
+                        self._tileFileSize = _w
+            except Exception:
+                pass
+
         try:
             dat = self._owner.op('tiles/table_tilelist')
             if dat is not None:
-                tile_utils.tileGridToDAT(tiles, dat)
+                tile_utils.tileGridToDAT(tiles, dat)  # solo escribe tiles reales
         except Exception as e:
             print('[MapaExt] Error escribiendo table_tilelist:', e)
 
-        # Forzar recook de ambas capas
-        try:
-            script_tiles = self._owner.op('tiles/script_tiles')
-            if script_tiles is not None:
-                script_tiles.cook(force=True)
-        except Exception as e:
-            print('[MapaExt] Error forzando cook de script_tiles:', e)
-        try:
-            script_dots = self._owner.op('tiles/script_dots')
-            if script_dots is not None:
-                script_dots.cook(force=True)
-        except Exception as e:
-            print('[MapaExt] Error forzando cook de script_dots:', e)
+        real_tiles = [t for t in tiles if t['filePath']]
+        new_files     = [t['filePath'] for t in real_tiles]
+        new_positions = sorted((t['tilex'], t['tiley']) for t in real_tiles)
+        count_changed     = (len(real_tiles) != self._lastTileCount)
+        positions_changed = (new_positions   != self._lastTilePositions)
+        files_changed     = (new_files       != self._lastTileFiles)
 
-        print('[MapaExt] updateTileGrid zoom={} -> {} tiles'.format(
-            int(self.zoomFloat), len(tiles)))
+        if count_changed or positions_changed:
+            # Estructura del grid cambió: recrear replicants con los ids row-major correctos
+            self._lastTileCount     = len(real_tiles)
+            self._lastTilePositions = new_positions
+            self._lastTileFiles     = new_files
+            rep = self._owner.op('tiles/replicator1')
+            if rep is not None:
+                rep.par.recreateall.pulse()
+            self._reconnectTileArray()
+        elif files_changed:
+            # Mismas posiciones, distinto contenido (p.ej. descarga asincrónica)
+            self._lastTileFiles = new_files
+            self._updateTileFiles()
+
+        # Actualizar uniforms del GLSL TOP
+        self._updateGLSLUniforms()
+
+        print('[MapaExt] updateTileGrid zoom={} -> {}/{} slots ({}x{})'.format(
+            int(self.zoomFloat), len(real_tiles), self._lastGridAll,
+            max((t['tilex'] for t in tiles), default=0) - min((t['tilex'] for t in tiles), default=0) + 1,
+            max((t['tiley'] for t in tiles), default=0) - min((t['tiley'] for t in tiles), default=0) + 1,
+        ))
         return tiles
+
+    # ------------------------------------------------------------------
+    # Atlas GLSL: metadata + uniforms
+    # ------------------------------------------------------------------
+
+    def _atlasMetaForZoom(self, zoom):
+        """
+        Carga y devuelve el JSON de metadatos del atlas para el zoom dado.
+        Devuelve None si el atlas no ha sido generado aún.
+        """
+        import json as _json
+        json_path = os.path.join(self.tilesDir, 'atlas_z{}.json'.format(zoom))
+        if os.path.exists(json_path):
+            try:
+                with open(json_path) as f:
+                    return _json.load(f)
+            except Exception as e:
+                print('[MapaExt] Error leyendo atlas metadata:', e)
+        return None
+
+    def _atlasPathForZoom(self, zoom):
+        """Devuelve la ruta del atlas PNG para el zoom dado, o None si no existe."""
+        path = os.path.join(self.tilesDir, 'atlas_z{}.png'.format(zoom))
+        return path if os.path.exists(path) else None
+
+    def _prefillTex3d(self, tex3d, sw, n_all):
+        """
+        n_all = grid_w * grid_h (todos los slots del grid, incluyendo gaps que quedan negros).
+        Activa la expresión frame-based en el switch, hace prefill sincrono,
+        y resetea el switch a constante para no cocinar innecesariamente cada frame.
+        """
+        sw.par.index.expr = 'me.time.frame-1'
+        tex3d.par.active    = False
+        tex3d.par.cachesize = n_all  # slots totales (gaps = negro en switch desconectado)
+        tex3d.par.prefillpulse.pulse()
+        sw.par.index.val = 0  # constante: sin expresión activa post-prefill
+
+    def _reconnectTileArray(self):
+        """
+        Ajusta el Texture 2D Array TOP tras una recreación del replicador.
+        cachesize = _lastGridAll (grid completo), gaps quedan negros.
+        Las conexiones tile_N -> switch_tiles las gestiona replicator1_callbacks.
+        """
+        try:
+            tiles_comp = self._owner.op('tiles')
+            tex3d = tiles_comp.op('tiles_tex3d1')
+            sw    = tiles_comp.op('switch_tiles')
+            if tex3d is None or sw is None:
+                return
+            self._prefillTex3d(tex3d, sw, self._lastGridAll)
+            print('[MapaExt] _reconnectTileArray: {}/{} slots, {} reales'.format(
+                self._lastGridAll, self._lastGridAll, self._lastTileCount))
+        except Exception as e:
+            print('[MapaExt] Error _reconnectTileArray:', e)
+
+    def _updateTileFiles(self):
+        """
+        Actualiza par.file de cada tile op leyendo desde table_tilelist (ya actualizada).
+        Llamado cuando las posiciones del grid no cambiaron pero sí los archivos.
+        """
+        try:
+            tiles_comp = self._owner.op('tiles')
+            tex3d = tiles_comp.op('tiles_tex3d1')
+            sw    = tiles_comp.op('switch_tiles')
+            dat   = tiles_comp.op('table_tilelist')
+            if tex3d is None or sw is None or dat is None:
+                return
+            # El id en la tabla ES el nombre del op (row-major, 1-indexed)
+            for r in range(1, dat.numRows):
+                row_id   = int(dat[r, 'id'])
+                tile_op  = tiles_comp.op('tile_{}'.format(row_id))
+                if tile_op is not None:
+                    tile_op.par.file = str(dat[r, 'filePath'])
+            self._prefillTex3d(tex3d, sw, self._lastGridAll)
+            print('[MapaExt] _updateTileFiles: {} tiles actualizados'.format(dat.numRows - 1))
+        except Exception as e:
+            print('[MapaExt] Error _updateTileFiles:', e)
+
+    def _updateGLSLUniforms(self):
+        """
+        Actualiza los uniforms del GLSL TOP tiles/glsl_tiles para el
+        Texture 2D Array. Lee el grid actual desde table_tilelist y
+        detecta el tile_size real desde tile_1.width.
+        Se llama automáticamente desde updateTileGrid() en cada pan/zoom.
+        """
+        try:
+            glsl = self._owner.op('tiles/glsl_tiles_array')
+            if glsl is None:
+                return
+
+            int_zoom    = int(self.zoomFloat)
+            scale_value = math.pow(2.0, self.zoomFloat - int_zoom)
+
+            # Tamaño real del tile (leído desde disco en updateTileGrid)
+            base_tile_size = getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
+            tile_size_px = base_tile_size * scale_value
+
+            # Centro en espacio tile (coordenadas float del zoom entero)
+            norm      = tile_utils.lngLatToTileIndex(self.centerLat, self.centerLon)
+            fixed_pow = math.pow(2.0, int_zoom)
+            cx = norm[0] * fixed_pow
+            cy = norm[1] * fixed_pow
+
+            # Grid info del grid completo (incluyendo gaps en bordes)
+            # Usar bounds guardados por updateTileGrid para coincidir con los layer indices
+            x_min  = self._xMinAll
+            y_min  = self._yMinAll
+            grid_w = self._gridWAll
+            grid_h = self._gridHAll
+
+            # Set uniforms via página "Vectors" del GLSL TOP
+            glsl.par.vec0name   = 'uCenterTile'
+            glsl.par.vec0valuex = cx
+            glsl.par.vec0valuey = cy
+            glsl.par.vec1name   = 'uAtlas'
+            glsl.par.vec1valuex = float(x_min)
+            glsl.par.vec1valuey = float(y_min)
+            glsl.par.vec1valuez = float(grid_w)
+            glsl.par.vec1valuew = float(grid_h)
+            glsl.par.vec2name   = 'uScreen'
+            glsl.par.vec2valuex = self.screenW
+            glsl.par.vec2valuey = self.screenH
+            glsl.par.vec3name   = 'uTileSize'
+            glsl.par.vec3valuex = tile_size_px
+
+        except Exception as e:
+            print('[MapaExt] Error _updateGLSLUniforms:', e)
 
     # ------------------------------------------------------------------
     # Interacción: pan, zoom, click, hover
@@ -285,7 +750,10 @@ class MapaExt:
         Procesa un click en pantalla. x_norm, y_norm son coordenadas normalizadas
         de renderpick [-0.5, 0.5].
         Convierte a lat/lon, busca la estación más cercana y actualiza selectedStation.
+        Ignorado si el mapa está en estado waiting / animating / locked.
         """
+        if self.mapState in ('waiting', 'animating', 'locked'):
+            return
         x_px = (x_norm + 0.5) * self.screenW
         y_px = self.screenH - (y_norm + 0.5) * self.screenH
         lat_lon = tile_utils.screenXYToLatLon(
@@ -294,18 +762,12 @@ class MapaExt:
             (self.screenW, self.screenH),
             self.zoomFloat
         )
-        self.selectedStation = self._findNearestStation(lat_lon[0], lat_lon[1])
+        station = self._findNearestStation(lat_lon[0], lat_lon[1])
+        if station:
+            self.selectStation(station)
+        else:
+            self.deselectStation()
         self._syncCustomPars()
-        self._writeSelectionInfo()
-        # Forzar recook del layer de puntos para actualizar el color amarillo
-        try:
-            script_dots = self._owner.op('tiles/script_dots')
-            if script_dots is not None:
-                script_dots.cook(force=True)
-        except Exception as e:
-            print('[MapaExt] Error recook script_dots:', e)
-        if self.selectedStation:
-            print('[MapaExt] Estación seleccionada:', self.selectedStation['estacion'])
 
     def _writeSelectionInfo(self):
         """
@@ -374,15 +836,29 @@ class MapaExt:
     def _syncCustomPars(self):
         """Actualiza los Custom Parameters del container con el estado actual."""
         try:
+            # Activar guardia en parexec para evitar loop de onValueChange
+            pe = self._owner.op('parexec_filtros')
+            if pe is not None:
+                pe.module._syncing = True
             p = self._owner.par
             if hasattr(p, 'Centerlat'):  p.Centerlat  = self.centerLat
             if hasattr(p, 'Centerlon'):  p.Centerlon  = self.centerLon
             if hasattr(p, 'Zoom'):       p.Zoom       = self.zoom
             if hasattr(p, 'Zoomfloat'): p.Zoomfloat  = self.zoomFloat
-            if self.selectedStation and hasattr(p, 'Selectedstation'):
-                p.Selectedstation = self.selectedStation.get('estacion', '')
+            if hasattr(p, 'Selectedstation'):
+                p.Selectedstation = (self.selectedStation or {}).get('estacion', '')
+            if hasattr(p, 'Currentmes'):   p.Currentmes   = self.currentMes
+            if hasattr(p, 'Currentfecha'): p.Currentfecha = self.currentFecha
+            if hasattr(p, 'Mapstate'):     p.Mapstate     = self.mapState
+            if hasattr(p, 'Infoalpha'):    p.Infoalpha    = self.getInfoAlpha()
         except Exception as e:
             print('[MapaExt] Error sync pars:', e)
+        finally:
+            try:
+                if pe is not None:
+                    pe.module._syncing = False
+            except:
+                pass
 
     # ------------------------------------------------------------------
     # Búsqueda de estación más cercana
@@ -438,21 +914,45 @@ class MapaExt:
         lines   = [
             s['estacion'],
             s['area'],
-            'Lat: {:.4f}  Lon: {:.4f}'.format(s['lat'], s['lon']),
+            #'Lat: {:.4f}  Lon: {:.4f}'.format(s['lat'], s['lon']),
         ]
         # Añadir parámetros de calidad con valor (no vacíos)
         quality_cols = [
-            ('BOD',   15),  # 생물화학적산소요구량
-            ('COD',   22),  # 화학적산소요구량
-            ('pH',    49),  # 수소이온농도
-            ('DO',    31),  # 용존산소
-            ('T-N',   57),  # 총질소
-            ('T-P',   59),  # 총인
-            ('TOC',   58),  # 총유기탄소
-            ('SS',    53),  # 부유물질
-            ('EC',    34),  # 전기전도도
+            ('BOD',   15),  # 생물화학적산소요구량(BOD)
+            ('COD',   22),  # 화학적산소요구량(COD)
+            ('pH',    50),  # 수소이온농도(pH)
+            ('DO',    31),  # 용존산소(DO)
+            ('T-N',   58),  # 총질소(T-N)
+            ('T-P',   60),  # 총인(T-P)
+            ('TOC',   59),  # 총유기탄소(TOC)
+            ('SS',    54),  # 부유물질(SS)
+            ('EC',    34),  # 전기전도도(EC)
+            ('Temp',  57),  # 수온
         ]
         for label, idx in quality_cols:
             if idx < len(data) and data[idx].strip() not in ('', '정량한계미만'):
                 lines.append('{}: {}'.format(label, data[idx].strip()))
         return '\n'.join(lines)
+
+    # ------------------------------------------------------------------
+    # Acciones públicas (llamables desde textport o scripts TD)
+    # Par.Recargardatos y par.Reiniciarmapa las invocan
+    # ------------------------------------------------------------------
+
+    def recargarDatos(self):
+        """Recarga estaciones y CSV desde disco y re-filtra con el mes activo."""
+        self._loadStations()
+        self._loadWaterCSV()
+        self.filterData(self.currentMes, self.currentFecha)
+        self.updateTileGrid()
+        print('[MapaExt] Datos recargados. Filas CSV:', len(self._water_rows))
+
+    def reiniciarMapa(self):
+        """Resetea el mapa al centro y zoom por defecto."""
+        self.centerLat = 36.5
+        self.centerLon = 127.5
+        self.zoomFloat = 6.6
+        self.zoom      = 6
+        self._syncCustomPars()
+        self.updateTileGrid()
+        print('[MapaExt] Mapa reiniciado al centro por defecto.')

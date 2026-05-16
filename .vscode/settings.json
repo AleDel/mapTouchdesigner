@@ -1,0 +1,10 @@
+{
+    // La extensión Python (y el depurador) carga automáticamente el .env
+    "python.envFile": "${workspaceFolder}/.env",
+
+    // El terminal integrado también recibe las vars al abrir el proyecto
+    "terminal.integrated.env.windows": {
+        "STADIA_API_KEY": "${env:STADIA_API_KEY}",
+        "MAPBOX_TOKEN":   "${env:MAPBOX_TOKEN}"
+    }
+}

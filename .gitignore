@@ -1,1 +1,8 @@
 Backup/
+
+# Secretos — nunca al repo
+.env
+
+# Python cache
+__pycache__/
+*.pyc

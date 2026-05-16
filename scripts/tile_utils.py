@@ -140,26 +140,31 @@ def computeVisibleTileGrid(center_lat, center_lon, zoom_float, screen_w, screen_
     center_tile_pixel_x = (center_tile_x + 0.5) * tile_size_scaled
     center_tile_pixel_y = (center_tile_y + 0.5) * tile_size_scaled
 
+    # Bounding box (clamped al rango válido)
+    ix_min = max(0, int(center_tile_x - num_tiles_x))
+    ix_max = min(num_grids - 1, int(center_tile_x + num_tiles_x))
+    iy_min = max(0, int(center_tile_y - num_tiles_y))
+    iy_max = min(num_grids - 1, int(center_tile_y + num_tiles_y))
+
     tiles = []
-    tile_id = 0
-    for ix in range(int(center_tile_x - num_tiles_x), int(center_tile_x + num_tiles_x) + 1):
-        if ix < 0 or ix >= num_grids:
-            continue
-        for iy in range(int(center_tile_y - num_tiles_y), int(center_tile_y + num_tiles_y) + 1):
-            if iy < 0 or iy >= num_grids:
-                continue
-            file_path = os.path.join(tiles_dir, str(fixed_zoom), str(ix), str(iy) + '.png')
-            file_path = file_path.replace('\\', '/')
-            if not os.path.exists(file_path):
-                continue
+    # Row-major: iy (norte→sur) varía lento, ix (oeste→este) varía rápido.
+    # Así el layer index del shader es: layer = (iy - iy_min)*grid_w + (ix - ix_min)
+    # Las posiciones sin tile en disco se incluyen con filePath='' (layer negro).
+    for iy in range(iy_min, iy_max + 1):
+        for ix in range(ix_min, ix_max + 1):
+            base_path = os.path.join(tiles_dir, str(fixed_zoom), str(ix), str(iy))
+            file_path = ''
+            for _ext in ('.png', '.jpg', '.jpeg'):
+                _candidate = (base_path + _ext).replace('\\', '/')
+                if os.path.exists(_candidate):
+                    file_path = _candidate
+                    break
 
             # Offset 3D: posición del tile respecto al centro de pantalla
             tile_px_x = (ix + 0.5) * tile_size_scaled
             tile_px_y = (iy + 0.5) * tile_size_scaled
-            # Diferencia respecto al centro del mapa en píxeles
             diff_x = tile_px_x - ttl_x
             diff_y = tile_px_y - ttl_y
-            # Convertir a espacio TD ([-0.5, 0.5] para el ancho de pantalla)
             ox = diff_x / screen_w
             oy = -diff_y / screen_w  # invertir Y para TD (Y hacia arriba)
 
@@ -174,20 +179,33 @@ def computeVisibleTileGrid(center_lat, center_lon, zoom_float, screen_w, screen_
                 'tamy': tile_3d_size,
                 'filePath': file_path,
             })
-            tile_id += 1
 
     return tiles
 
 
 def tileGridToDAT(tiles, dat_op):
     """
-    Escribe la lista de tiles devuelta por computeVisibleTileGrid en un tableDAT de TD.
+    Escribe en dat_op solo los tiles con filePath no vacío.
+    tiles  : lista COMPLETA de computeVisibleTileGrid() (incluyendo gaps con filePath='').
+    El 'id' es la posición row-major 1-indexada dentro del grid completo, de manera
+    que el replicador nombra el op con el índice correcto del switch (tile_5 -> input 4).
+    Los gaps simplemente no tienen op, su switch-input queda desconectado (negro).
     dat_op : referencia al operador tableDAT
     """
     dat_op.clear()
     dat_op.appendRow(['id', 'ox', 'oy', 'tamx', 'tamy', 'tilex', 'tiley', 'zoom', 'filePath'])
-    for t in tiles:
+    real_tiles = [t for t in tiles if t.get('filePath', '')]
+    if not real_tiles:
+        return
+    # Usar el grid COMPLETO (con gaps) para calcular la posición row-major
+    x_min = min(t['tilex'] for t in tiles)
+    grid_w = max(t['tilex'] for t in tiles) - x_min + 1
+    y_min = min(t['tiley'] for t in tiles)
+    for t in real_tiles:
+        ix = t['tilex'] - x_min
+        iy = t['tiley'] - y_min
+        row_major_id = iy * grid_w + ix + 1  # 1-indexed -> op se llama tile_{row_major_id}
         dat_op.appendRow([
-            t['id'], t['ox'], t['oy'], t['tamx'], t['tamy'],
+            row_major_id, t['ox'], t['oy'], t['tamx'], t['tamy'],
             t['tilex'], t['tiley'], t['zoom'], t['filePath']
         ])

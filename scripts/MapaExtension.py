@@ -80,6 +80,7 @@ class MapaExt:
             self._lastTileFiles     = []   # file paths de los tiles reales
             self._lastTilePositions = []   # posiciones (tilex, tiley) de tiles reales
             self._lastGridAll       = 0    # grid_w * grid_h (todos los slots, incluyendo gaps)
+            self._lastTilesDir      = ''   # directorio de tiles activo en la última grilla
             self._xMinAll           = 0    # tilex mínimo del grid completo (incluyendo gaps)
             self._yMinAll           = 0    # tiley mínimo del grid completo
             self._gridWAll          = 1    # grid_w completo
@@ -107,6 +108,8 @@ class MapaExt:
 
             owner_op.store('ext_init_ok', 'OK estaciones={} rows={}'.format(
                 len(self._stations), len(self._water_rows)))
+            
+            self.reiniciarMapa()
 
         except Exception as _init_err:
             import traceback
@@ -526,7 +529,8 @@ class MapaExt:
             self.centerLat, self.centerLon,
             self.zoomFloat,
             self.screenW, self.screenH,
-            self.tilesDir
+            self.tilesDir,
+            tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
         )
 
         # Métricas del grid completo (incluyendo gaps) para cachesize del tex3d
@@ -545,18 +549,12 @@ class MapaExt:
             self._gridHAll = 1
             self._lastGridAll = 0
 
-        # Tamaño real del tile desde disco (una vez por pan/zoom)
+        # Tamaño real del tile desde disco (soporta PNG y JPEG)
         real_files = [t['filePath'] for t in tiles if t.get('filePath')]
         if real_files:
-            try:
-                import struct as _struct
-                with open(real_files[0], 'rb') as _f:
-                    _f.read(16)  # PNG: signature(8) + IHDR length(4) + 'IHDR'(4)
-                    _w = _struct.unpack('>I', _f.read(4))[0]
-                    if _w > 0:
-                        self._tileFileSize = _w
-            except Exception:
-                pass
+            _w, _h = tile_utils.readImageSize(real_files[0])
+            if _w > 0:
+                self._tileFileSize = _w
 
         try:
             dat = self._owner.op('tiles/table_tilelist')
@@ -566,24 +564,10 @@ class MapaExt:
             print('[MapaExt] Error escribiendo table_tilelist:', e)
 
         real_tiles = [t for t in tiles if t['filePath']]
-        new_files     = [t['filePath'] for t in real_tiles]
-        new_positions = sorted((t['tilex'], t['tiley']) for t in real_tiles)
-        count_changed     = (len(real_tiles) != self._lastTileCount)
-        positions_changed = (new_positions   != self._lastTilePositions)
-        files_changed     = (new_files       != self._lastTileFiles)
 
-        if count_changed or positions_changed:
-            # Estructura del grid cambió: recrear tile ops con los ids row-major correctos
-            self._lastTileCount     = len(real_tiles)
-            self._lastTilePositions = new_positions
-            self._lastTileFiles     = new_files
-            self._reconnectTileArray()
-        elif files_changed:
-            # Mismas posiciones, distinto contenido (p.ej. descarga asincrónica)
-            self._lastTileFiles = new_files
-            self._updateTileFiles()
-
-        # Actualizar uniforms del GLSL TOP y tabla de dots
+        # El replicator1 escucha table_tilelist y gestiona los ops tile_N
+        # (creación, archivo, cableado del switch) via onReplicate callbacks.
+        # Esta extensión solo actualiza uniforms y dots.
         self._updateGLSLUniforms()
         self._updateDotsTable()
         self._updateDotsUniforms()
@@ -621,15 +605,28 @@ class MapaExt:
 
     def _prefillTex3d(self, tex3d, sw, n_all):
         """
-        n_all = grid_w * grid_h (todos los slots del grid, incluyendo gaps que quedan negros).
-        Activa la expresión frame-based en el switch, hace prefill sincrono,
-        y resetea el switch a constante para no cocinar innecesariamente cada frame.
+        Configura el tex3d y programa un prefill diferido.
+        - Mantiene active=True y la expresión frame-based en el switch para que
+          el tex3d pueda capturar cada capa mientras los moviefileinTOP cargan.
+        - Después de n_all+5 frames (tiempo suficiente para carga desde disco),
+          ejecuta el prefill real, limpia la expresión del switch y congela el tex3d.
+        NOTA: sw.par.index.val = N no limpia la expresión en TD; hay que borrar
+        sw.par.index.expr explícitamente antes de asignar el valor constante.
         """
-        tex3d.par.cachesize = n_all  # slots totales (gaps = negro via moviefilein_template)
-        sw.par.index.expr = 'me.time.frame-1'
-        tex3d.par.active    = False
-        tex3d.par.prefillpulse.pulse()
-        sw.par.index.val = 0  # constante: sin expresión activa post-prefill
+        tex3d.par.cachesize = n_all
+        tex3d.par.active    = True          # activo para que el prefill funcione
+        sw.par.index.expr   = 'me.time.frame-1'  # ciclar a través de todas las capas
+
+        # Diferir el prefill para dar tiempo a que moviefileinTOP cargue desde disco
+        delay = max(8, n_all + 5)
+        run(
+            "t=op('{}'); s=op('{}')\n"
+            "t.par.prefillpulse.pulse()\n"
+            "s.par.index.expr=''\n"
+            "s.par.index.val=0\n"
+            "t.par.active=False\n".format(tex3d.path, sw.path),
+            delayFrames=delay
+        )
 
     def _reconnectTileArray(self):
         """
@@ -900,7 +897,8 @@ class MapaExt:
         Llamar desde un chopexec cuando cambia el valor de drag (u, v en píxeles).
         Actualiza el centro del mapa y regenera la grilla de tiles.
         """
-        new_center = tile_utils.drag(u, v, (self.centerLat, self.centerLon), self.zoomFloat)
+        new_center = tile_utils.drag(u, v, (self.centerLat, self.centerLon), self.zoomFloat,
+                                      tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE))
         self.centerLat = new_center[0]
         self.centerLon = new_center[1]
         self._syncCustomPars()
@@ -933,7 +931,8 @@ class MapaExt:
             [x_px, y_px],
             (self.centerLat, self.centerLon),
             (self.screenW, self.screenH),
-            self.zoomFloat
+            self.zoomFloat,
+            tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
         )
         station = self._findNearestStation(lat_lon[0], lat_lon[1])
         if station:
@@ -962,7 +961,8 @@ class MapaExt:
             [x_px, y_px],
             (self.centerLat, self.centerLon),
             (self.screenW, self.screenH),
-            self.zoomFloat
+            self.zoomFloat,
+            tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
         )
         self.hoverLat = lat_lon[0]
         self.hoverLon = lat_lon[1]
@@ -977,7 +977,8 @@ class MapaExt:
             (lat, lon),
             (self.centerLat, self.centerLon),
             (self.screenW, self.screenH),
-            self.zoomFloat
+            self.zoomFloat,
+            tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE)
         )
 
     def getStationScreenXY(self, area, estacion):

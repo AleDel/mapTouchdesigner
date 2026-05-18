@@ -58,7 +58,9 @@ def onValueChange(par, prev):
 
     # --- Visualizacion ---
     elif name == 'Tileset':
-        _ext().updateTileGrid()
+        # Diferir 1 frame para evitar cook loop: _reconnectTileArray crea/destruye
+        # ops moviefileinTOP mientras el cook del parexec sigue activo.
+        run("op('/project1/Mapa2').ext.MapaExt.updateTileGrid()", delayFrames=1)
 
     elif name == 'Mapstate':
         # Escrito desde fuera (instalación): sincronizar estado interno sin loop

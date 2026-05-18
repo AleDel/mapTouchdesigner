@@ -13,9 +13,15 @@
 
 from typing import Any
 
-W = 1280
-H = 720
-CLICK_PX = 5    # píxeles máximos de movimiento para considerar un click
+W_DEFAULT = 1280
+H_DEFAULT = 720
+CLICK_PX  = 5    # píxeles máximos de movimiento para considerar un click
+
+
+def _dims():
+    """Dimensiones actuales del container en píxeles."""
+    c = op('/project1/Mapa2')
+    return (c.width or W_DEFAULT), (c.height or H_DEFAULT)
 
 _dragging = False
 _last_u   = None   # u propio (no usar prev de TD: puede ser stale tras click)
@@ -34,7 +40,7 @@ def onOffToOn(panelValue: PanelValue):
     if panelValue.name == 'lselect':
         panel     = op('/project1/Mapa2').panel
         _dragging = True
-        _last_u   = float(panel.u)   # ancla propia para el primer delta
+        _last_u   = float(panel.u)
         _last_v   = float(panel.v)
         _start_u  = _last_u
         _start_v  = _last_v
@@ -50,6 +56,7 @@ def onOnToOff(panelValue: PanelValue):
     if panelValue.name == 'lselect':
         if _start_u is not None:
             panel = op('/project1/Mapa2').panel
+            W, H  = _dims()
             du = abs(float(panel.u) - _start_u) * W
             dv = abs(float(panel.v) - _start_v) * H
             if du < CLICK_PX and dv < CLICK_PX:
@@ -69,7 +76,6 @@ def whileOff(panelValue: PanelValue):
 
 def onValueChange(panelValue: PanelValue, prev: Any):
     """Movimiento del ratón (drag) y rueda (zoom)."""
-    global _last_v
     name = panelValue.name
 
     if name == 'wheel':
@@ -78,18 +84,20 @@ def onValueChange(panelValue: PanelValue, prev: Any):
         if abs(val) > 0.001:
             _ext().onZoom(val * 0.3)
 
-    elif name == 'u' and _dragging:
-        # Usar _last_u propio en lugar de prev (prev puede ser stale si el ratón
-        # se movió entre el drag anterior y este sin disparar onValueChange)
+    elif name in ('u', 'v') and _dragging:
+        # Manejar movimiento en cualquier dirección: u y v disparan onValueChange
+        # por separado. Ambos leen del panel para que el segundo disparo compute
+        # delta=0 (los valores ya fueron actualizados por el primero).
         global _last_u, _last_v
-        curr_u  = float(panelValue.val)
         panel   = op('/project1/Mapa2').panel
+        curr_u  = float(panel.u)
         curr_v  = float(panel.v)
         du      = curr_u - (_last_u if _last_u is not None else curr_u)
         dv      = curr_v - (_last_v if _last_v is not None else curr_v)
         _last_u = curr_u
         _last_v = curr_v
 
+        W, H  = _dims()
         dx_px = du * W
         dy_px = dv * H
 

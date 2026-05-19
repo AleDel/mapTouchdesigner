@@ -110,9 +110,18 @@ def onValueChange(par, prev):
             gs.par.render = show
 
     elif name == 'Showinfo':
-        ti = op('/project1/Mapa2/ui/text_info')
-        if ti is not None:
-            ti.bypass = not bool(par.val)
+        # Bypasear el Over TOP que compone el panel UI sobre el mapa
+        over_ui = op('/project1/Mapa2/tiles/over_ui')
+        if over_ui is not None:
+            over_ui.bypass = not bool(par.val)
+
+    elif name in ('Infopx', 'Infopy'):
+        # Mover el Container COMP ui directamente
+        ui_comp = op('/project1/Mapa2/ui')
+        mapa2 = op('/project1/Mapa2')
+        if ui_comp is not None and mapa2 is not None:
+            ui_comp.par.x = mapa2.par.Infopx.val
+            ui_comp.par.y = mapa2.par.Infopy.val
 
 
 def onPulse(par):

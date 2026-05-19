@@ -347,6 +347,10 @@ class MapaExt:
             if not hasattr(p, 'Autodeselect'):
                 par = page.appendToggle('Autodeselect', label='Auto-deselect')[0]
                 par.default = True; par.val = True
+            if not hasattr(p, 'Locktime'):
+                par = page.appendFloat('Locktime', label='Tiempo bloqueado (seg)')[0]
+                par.default = 10.0; par.min = 1.0; par.max = 120.0
+                par.normMin = 2.0; par.normMax = 30.0; par.val = 10.0
             if not hasattr(p, 'Deselectdelay'):
                 par = page.appendFloat('Deselectdelay', label='Tiempo visible (seg)')[0]
                 par.default = 8.0; par.min = 0.5; par.max = 120.0
@@ -396,7 +400,7 @@ class MapaExt:
         self.selectedStation = station
         self._selectionTime  = absTime.seconds
         self._deselect_token += 1
-        self._setState('selected')
+        self._setState('locked')
         self._writeSelectionInfo()
         self._writeStateDAT()
         self._scheduleAutoDeselect(self._deselect_token)
@@ -426,13 +430,10 @@ class MapaExt:
         try:
             if not bool(self._owner.par.Autodeselect.val):
                 return
-            fade_in  = max(0.0, float(self._owner.par.Infofadein.val))
-            delay    = max(0.0, float(self._owner.par.Deselectdelay.val))
-            fade_out = max(0.0, float(self._owner.par.Infofadeout.val))
-            total    = fade_in + delay + fade_out
+            locktime = max(0.1, float(self._owner.par.Locktime.val))
             run(
                 "op('{}').ext.MapaExt._autoDeselect({})" .format(self._owner.path, token),
-                delaySeconds=max(0.1, total)
+                delayMilliSeconds=int(locktime * 1000)
             )
         except Exception as e:
             print('[MapaExt] Error programando auto-deselect:', e)
@@ -456,21 +457,36 @@ class MapaExt:
         elapsed = absTime.seconds - self._selectionTime
         try:
             fade_in  = max(0.001, float(self._owner.par.Infofadein.val))
-            delay    = max(0.0,   float(self._owner.par.Deselectdelay.val))
             fade_out = max(0.001, float(self._owner.par.Infofadeout.val))
             auto     = bool(self._owner.par.Autodeselect.val)
+            locktime = max(fade_in + fade_out + 0.01, float(self._owner.par.Locktime.val))
         except:
             return 1.0
         if elapsed < fade_in:
             return elapsed / fade_in
         if not auto:
             return 1.0
-        if elapsed < fade_in + delay:
+        visible_end = locktime - fade_out
+        if elapsed < visible_end:
             return 1.0
-        t_out = elapsed - fade_in - delay
+        t_out = elapsed - visible_end
         if t_out < fade_out:
             return max(0.0, 1.0 - t_out / fade_out)
         return 0.0
+
+    def getLockProgress(self):
+        """
+        Devuelve el progreso del bloqueo (0.0 → 1.0).
+        0.0 si no está en estado locked. Útil para animar una barra de espera.
+        """
+        if self._selectionTime is None or self.mapState != 'locked':
+            return 0.0
+        try:
+            locktime = max(0.1, float(self._owner.par.Locktime.val))
+        except:
+            return 0.0
+        elapsed = absTime.seconds - self._selectionTime
+        return min(1.0, elapsed / locktime)
 
     def _writeStateDAT(self):
         """Escribe estado completo del mapa en data/table_mapstate (key-value)."""
@@ -907,6 +923,8 @@ class MapaExt:
         Llamar desde un chopexec cuando cambia el valor de drag (u, v en píxeles).
         Actualiza el centro del mapa y regenera la grilla de tiles.
         """
+        if self.mapState == 'locked':
+            return
         new_center = tile_utils.drag(u, v, (self.centerLat, self.centerLon), self.zoomFloat,
                                       tile_size=getattr(self, '_tileFileSize', tile_utils.TILE_SIZE))
         self.centerLat = new_center[0]
@@ -919,6 +937,8 @@ class MapaExt:
         Aplica un delta de zoom (positivo = acercar, negativo = alejar).
         delta es un float (ej. 0.1 por tick de rueda).
         """
+        if self.mapState == 'locked':
+            return
         zoom_min = 5.0
         zoom_max = 8.0
         self.zoomFloat = max(zoom_min, min(zoom_max, self.zoomFloat + delta))
@@ -1097,11 +1117,10 @@ class MapaExt:
         s = self.selectedStation
         headers = self._water_headers
         data    = s.get('data', [])
-        lines   = [
-            s['estacion'],
-            s['area'],
-            #'Lat: {:.4f}  Lon: {:.4f}'.format(s['lat'], s['lon']),
-        ]
+        lines   = [s['estacion']]
+        if s.get('area') and s['area'] != s['estacion']:
+            lines.append(s['area'])
+        #lines.append('Lat: {:.4f}  Lon: {:.4f}'.format(s['lat'], s['lon']))
         # Añadir parámetros de calidad con valor (no vacíos)
         quality_cols = [
             ('BOD',   15),  # 생물화학적산소요구량(BOD)

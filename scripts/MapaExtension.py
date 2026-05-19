@@ -398,7 +398,15 @@ class MapaExt:
         self._writeStateDAT()
         self._scheduleAutoDeselect(self._deselect_token)
         self._updateDotsTable()
+        try:
+            init_op = op('/project1/Init')
+            if init_op is not None:
+                init_op.par.Start.pulse(1,frames=2)
+                
+        except Exception as e:
+            print('[MapaExt] Error pulsando Init.Start:', e)
         print('[MapaExt] Seleccionada:', station['estacion'] if station else '?')
+
 
     def deselectStation(self):
         """Deselecciona la estación activa y vuelve al estado usable."""

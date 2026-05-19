@@ -17,9 +17,9 @@ def _ext():
 
 
 def _cookDots():
-    sd = op('/project1/Mapa2/tiles/script_dots')
-    if sd is not None:
-        sd.cook(force=True)
+    gd = op('/project1/Mapa2/tiles/glsl_dots')
+    if gd is not None:
+        gd.cook(force=True)
 
 
 def _filterAndRefresh(mes_idx, fecha):
@@ -90,12 +90,22 @@ def onValueChange(par, prev):
         ext.updateTileGrid()
 
     elif name in ('Dotradius', 'Dotradiussel'):
+        _ext()._updateDotsUniforms()
+        _cookDots()
+
+    elif name in ('Dotcolr', 'Dotcolg', 'Dotcolb', 'Dotcola',
+                  'Dotselr', 'Dotselg', 'Dotselb', 'Dotsela'):
+        _ext()._updateDotsUniforms()
         _cookDots()
 
     elif name == 'Showdots':
-        sd = op('/project1/Mapa2/tiles/script_dots')
-        if sd is not None:
-            sd.bypass = not bool(par.val)
+        show = bool(par.val)
+        gd = op('/project1/Mapa2/tiles/glsl_dots')
+        if gd is not None:
+            gd.bypass = not show
+        gs = op('/project1/Mapa2/render/geo_stations')
+        if gs is not None:
+            gs.par.render = show
 
     elif name == 'Showinfo':
         ti = op('/project1/Mapa2/ui/text_info')

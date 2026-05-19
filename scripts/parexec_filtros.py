@@ -3,6 +3,8 @@
 # onValueChange se dispara solo al cambiar un custom par — sin polling.
 # onPulse se dispara al pulsar los botones de Acciones.
 
+import math
+
 _MES_CODES = ['01', '02', '03', '04', '05', '06']
 
 # Guardia para evitar loop: _syncCustomPars escribe en Centerlat/Centerlon/Zoomfloat,
@@ -14,12 +16,16 @@ def _ext():
     return op('/project1/Mapa2').ext.MapaExt
 
 
-def _filterAndRefresh(mes_idx, fecha):
-    mes = _MES_CODES[mes_idx] if 0 <= mes_idx < len(_MES_CODES) else '01'
-    _ext().filterData(mes, fecha.strip())
+def _cookDots():
     sd = op('/project1/Mapa2/tiles/script_dots')
     if sd is not None:
         sd.cook(force=True)
+
+
+def _filterAndRefresh(mes_idx, fecha):
+    mes = _MES_CODES[mes_idx] if 0 <= mes_idx < len(_MES_CODES) else '01'
+    _ext().filterData(mes, fecha.strip())
+    _cookDots()
 
 
 def onValueChange(par, prev):
@@ -41,7 +47,6 @@ def onValueChange(par, prev):
         ext.updateTileGrid()
 
     elif name == 'Zoomfloat':
-        import math
         ext = _ext()
         ext.zoomFloat = float(par.val)
         ext.zoom      = int(math.floor(ext.zoomFloat))
@@ -67,15 +72,11 @@ def onValueChange(par, prev):
         ext = _ext()
         ext.mapState = str(par.val)
         ext._writeStateDAT()
-        sd = op('/project1/Mapa2/tiles/script_dots')
-        if sd is not None:
-            sd.cook(force=True)
+        _cookDots()
 
     elif name in ('Autodeselect', 'Deselectdelay', 'Infofadein', 'Infofadeout'):
         # Cambios en config de animación: solo forzar redraw
-        sd = op('/project1/Mapa2/tiles/script_dots')
-        if sd is not None:
-            sd.cook(force=True)
+        _cookDots()
 
     elif name in ('Screenw', 'Screenh'):
         ext = _ext()
@@ -89,9 +90,7 @@ def onValueChange(par, prev):
         ext.updateTileGrid()
 
     elif name in ('Dotradius', 'Dotradiussel'):
-        sd = op('/project1/Mapa2/tiles/script_dots')
-        if sd is not None:
-            sd.cook(force=True)
+        _cookDots()
 
     elif name == 'Showdots':
         sd = op('/project1/Mapa2/tiles/script_dots')

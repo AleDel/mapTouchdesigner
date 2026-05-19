@@ -1014,6 +1014,8 @@ class MapaExt:
             pe = self._owner.op('parexec_filtros')
             if pe is not None:
                 pe.module._syncing = True
+            else:
+                print('[MapaExt] WARN: parexec_filtros no encontrado, _syncing inactivo')
             p = self._owner.par
             if hasattr(p, 'Centerlat'):  p.Centerlat  = self.centerLat
             if hasattr(p, 'Centerlon'):  p.Centerlon  = self.centerLon

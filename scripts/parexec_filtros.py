@@ -17,9 +17,9 @@ def _ext():
 
 
 def _cookDots():
-    gd = op('/project1/Mapa2/tiles/glsl_dots')
-    if gd is not None:
-        gd.cook(force=True)
+    # No usar force=True desde dentro de un cook callback: genera dependency loop.
+    # glsl_dots se recookea solo al cambiar sus inputs/uniforms; no hace falta forzar.
+    pass
 
 
 def _filterAndRefresh(mes_idx, fecha):
@@ -36,21 +36,23 @@ def onValueChange(par, prev):
     name = par.name
 
     # --- Navegación manual por slider ---
+    # Se difiere 1 frame igual que Tileset: escribir en table_tilelist / uniforms
+    # desde dentro del cook de parexec dispara otro cook (dependency loop).
     if name == 'Centerlat':
         ext = _ext()
         ext.centerLat = float(par.val)
-        ext.updateTileGrid()
+        run("op('/project1/Mapa2').ext.MapaExt.updateTileGrid()", delayFrames=1)
 
     elif name == 'Centerlon':
         ext = _ext()
         ext.centerLon = float(par.val)
-        ext.updateTileGrid()
+        run("op('/project1/Mapa2').ext.MapaExt.updateTileGrid()", delayFrames=1)
 
     elif name == 'Zoomfloat':
         ext = _ext()
         ext.zoomFloat = float(par.val)
         ext.zoom      = int(math.floor(ext.zoomFloat))
-        ext.updateTileGrid()
+        run("op('/project1/Mapa2').ext.MapaExt.updateTileGrid()", delayFrames=1)
 
     # --- Filtros ---
     elif name == 'Mes':

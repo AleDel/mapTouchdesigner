@@ -108,8 +108,11 @@ class MapaExt:
 
             owner_op.store('ext_init_ok', 'OK estaciones={} rows={}'.format(
                 len(self._stations), len(self._water_rows)))
-            
-            self.reiniciarMapa()
+
+            # Diferir reiniciarMapa 2 frames para que parexec_filtros esté completamente
+            # inicializado antes de que _syncCustomPars escriba en los custom pars.
+            # Llamarlo directamente en __init__ causa el "Cook dependency loop" en el arranque.
+            run("op('{}').ext.MapaExt.reiniciarMapa()".format(owner_op.path), delayFrames=2)
 
         except Exception as _init_err:
             import traceback
@@ -406,7 +409,6 @@ class MapaExt:
         except Exception as e:
             print('[MapaExt] Error pulsando Init.Start:', e)
         print('[MapaExt] Seleccionada:', station['estacion'] if station else '?')
-
 
     def deselectStation(self):
         """Deselecciona la estación activa y vuelve al estado usable."""

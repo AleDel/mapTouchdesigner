@@ -89,6 +89,7 @@ class MapaExt:
 
             self._loadStations()
             self._loadWaterCSV()
+            self._computeQualityRanges()
 
             # Primer cálculo de tiles y datos
             self.updateTileGrid()
@@ -128,6 +129,13 @@ class MapaExt:
     # Carga de datos
     # ------------------------------------------------------------------
 
+    # Columnas de calidad del agua: (nombre_canal, índice_columna_csv)
+    _QUALITY_COLS = [
+        ('bod',  15), ('cod',  22), ('ph',   50), ('do',   31),
+        ('tn',   58), ('tp',   60), ('toc',  59), ('ss',   54),
+        ('ec',   34), ('temp', 57),
+    ]
+
     def _loadStations(self):
         """Carga estaciones_coords.csv en self._stations."""
         self._stations = []
@@ -143,6 +151,45 @@ class MapaExt:
                     })
         except Exception as e:
             print('[MapaExt] Error cargando estaciones_coords.csv:', e)
+
+    def _computeQualityRanges(self):
+        """Calcula min/max de cada parámetro de calidad desde los datos cargados."""
+        self._quality_ranges = {}
+        for label, idx in self._QUALITY_COLS:
+            vals = []
+            for row in self._water_rows:
+                if idx < len(row):
+                    v = row[idx].strip()
+                    if v not in ('', '\uc815\ub7c9\ud55c\uacc4\ubbf8\ub9cc'):
+                        try:
+                            vals.append(float(v))
+                        except:
+                            pass
+            self._quality_ranges[label] = (min(vals), max(vals)) if vals else (0.0, 1.0)
+
+    def _updateQualityChop(self):
+        """Actualiza /project1/constant1 con los valores normalizados (0-1) de la estación seleccionada."""
+        chop = op('/project1/constant1')
+        if chop is None:
+            return
+        s    = self.selectedStation
+        data = s.get('data', []) if s else []
+        for i, (label, idx) in enumerate(self._QUALITY_COLS):
+            val_norm = 0.0
+            if s and idx < len(data):
+                v = data[idx].strip()
+                if v not in ('', '\uc815\ub7c9\ud55c\uacc4\ubbf8\ub9cc'):
+                    try:
+                        raw = float(v)
+                        lo, hi = self._quality_ranges.get(label, (0.0, 1.0))
+                        if hi > lo:
+                            val_norm = max(0.0, min(1.0, (raw - lo) / (hi - lo)))
+                    except:
+                        pass
+            try:
+                getattr(chop.par, 'const{}value'.format(i)).val = val_norm
+            except Exception as e:
+                print('[MapaExt] Error actualizando constant1 ch{} ({}): {}'.format(i, label, e))
 
     def _loadWaterCSV(self):
         """Carga water2022.csv en memoria como lista de dicts."""
@@ -405,6 +452,7 @@ class MapaExt:
         self._writeStateDAT()
         self._scheduleAutoDeselect(self._deselect_token)
         self._updateDotsTable()
+        self._updateQualityChop()
         try:
             init_op = op('/project1/Init')
             if init_op is not None:
@@ -423,6 +471,7 @@ class MapaExt:
         self._writeStateDAT()
         self._syncCustomPars()
         self._updateDotsTable()
+        self._updateQualityChop()
         print('[MapaExt] Estación deseleccionada')
 
     def _scheduleAutoDeselect(self, token):
@@ -1148,6 +1197,7 @@ class MapaExt:
         """Recarga estaciones y CSV desde disco y re-filtra con el mes activo."""
         self._loadStations()
         self._loadWaterCSV()
+        self._computeQualityRanges()
         self.filterData(self.currentMes, self.currentFecha)
         self.updateTileGrid()
         print('[MapaExt] Datos recargados. Filas CSV:', len(self._water_rows))

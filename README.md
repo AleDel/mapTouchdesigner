@@ -114,7 +114,6 @@ download_tiles.download(
 - Scripts in `scripts/` are portable: they use `project.folder` as the root, no absolute paths
 - `tile_utils.py` has no TD imports — it can be tested with standard Python
 - The `.CUBE` LUT files in `35 Free LUTs/` can be used with TD's `LookupTOP` operator
-- Version history is in `Backup/` (63 versions)
 
 ---
 
